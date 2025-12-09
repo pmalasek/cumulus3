@@ -1,0 +1,72 @@
+basePath: /
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: This is a sample server for Cumulus3 object storage.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: Cumulus3 API
+  version: "1.0"
+paths:
+  /api/v1/files:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Uploads a file to the storage and saves its metadata to BadgerDB
+      parameters:
+      - description: File to upload
+        in: formData
+        name: file
+        required: true
+        type: file
+      - description: Comma-separated tags
+        in: formData
+        name: tags
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: File uploaded successfully
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Upload a file
+      tags:
+      - files
+  /api/v1/files/{filename}:
+    get:
+      description: Downloads a file by its filename
+      parameters:
+      - description: Filename
+        in: path
+        name: filename
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: File content
+          schema:
+            type: file
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: Download a file
+      tags:
+      - files
+swagger: "2.0"
