@@ -14,7 +14,7 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	// Ujisti se, že cesta odpovídá tvému go.mod
-	"github.com/pmalasek/cumulus3/internal/storage"
+	"github.com/pmalasek/cumulus3/src/internal/storage"
 )
 
 type Server struct {

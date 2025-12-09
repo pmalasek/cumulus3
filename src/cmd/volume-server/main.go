@@ -7,9 +7,9 @@ import (
 	"os"
 
 	"github.com/joho/godotenv"
-	"github.com/pmalasek/cumulus3/internal/api"
-	"github.com/pmalasek/cumulus3/internal/storage"
-	"github.com/pmalasek/cumulus3/internal/utils"
+	"github.com/pmalasek/cumulus3/src/internal/api"
+	"github.com/pmalasek/cumulus3/src/internal/storage"
+	"github.com/pmalasek/cumulus3/src/internal/utils"
 )
 
 // @title Cumulus3 API
