@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -33,15 +34,20 @@ func NewStore(dir string, maxDataFileSize int64) *Store {
 	// Find the latest volume ID
 	var currentVolumeID int64 = 1
 	for {
-		filename := fmt.Sprintf("volume_%08d.dat", currentVolumeID)
-		fullPath := filepath.Join(dir, filename)
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		exists := false
+		// Check new format
+		if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("volume_%08d.dat", currentVolumeID))); err == nil {
+			exists = true
+		}
+		// Check legacy format
+		if !exists {
+			if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("volume_%d.dat", currentVolumeID))); err == nil {
+				exists = true
+			}
+		}
+
+		if !exists {
 			if currentVolumeID > 1 {
-				// Check if the previous volume is full?
-				// Actually, we can just start writing to the previous one if it exists,
-				// and WriteBlob will handle rotation if it's full.
-				// But wait, if loop breaks, it means volume_X does not exist.
-				// So the last existing one is X-1.
 				currentVolumeID--
 			}
 			break
@@ -86,10 +92,21 @@ func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volu
 	filename := fmt.Sprintf("volume_%08d.dat", s.CurrentVolumeID)
 	fullPath := filepath.Join(s.BaseDir, filename)
 
+	// If new format doesn't exist, check if legacy exists
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		filenameLegacy := fmt.Sprintf("volume_%d.dat", s.CurrentVolumeID)
+		fullPathLegacy := filepath.Join(s.BaseDir, filenameLegacy)
+		if _, err := os.Stat(fullPathLegacy); err == nil {
+			filename = filenameLegacy
+			fullPath = fullPathLegacy
+		}
+	}
+
 	// Check if we need to rotate
 	if stat, err := os.Stat(fullPath); err == nil {
 		if stat.Size()+totalEntrySize > s.MaxDataFileSize {
 			s.CurrentVolumeID++
+			// New volume always uses new format
 			filename = fmt.Sprintf("volume_%08d.dat", s.CurrentVolumeID)
 			fullPath = filepath.Join(s.BaseDir, filename)
 		}
@@ -140,7 +157,7 @@ func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volu
 
 	// 4. Zápis do META souboru (Index)
 	// Formát: BlobID(8) + Offset(8) + Size(8) + Comp(1) + CRC(4) = 29 bytes
-	metaFilename := fmt.Sprintf("volume_%08d.meta", volumeID)
+	metaFilename := strings.TrimSuffix(filename, ".dat") + ".meta"
 	metaPath := filepath.Join(s.BaseDir, metaFilename)
 	mf, err := os.OpenFile(metaPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
