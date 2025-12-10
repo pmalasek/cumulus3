@@ -150,12 +150,24 @@ func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", mimeType)
 	encodedFilename := url.PathEscape(filename)
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"; filename*=UTF-8''%s", filename, encodedFilename))
+
+	// Determine disposition based on mime type
+	disposition := "attachment"
+	if strings.HasPrefix(mimeType, "image/") ||
+		strings.HasPrefix(mimeType, "video/") ||
+		strings.HasPrefix(mimeType, "audio/") ||
+		mimeType == "application/pdf" ||
+		mimeType == "text/plain" {
+		disposition = "inline"
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Write(data)
 }
 
 // {
-//   "fileID": "f73c3c10-f516-4a6b-9f5c-daae1b42e710"
-// 91995bdd-9466-4ace-8183-ef02b3c0cd14
+//   "fileID": "f73c3c10-f516-4a6b-9f5c-daae1b42e710",
+//   "fileID": "91995bdd-9466-4ace-8183-ef02b3c0cd14",  // PDF
+//   "fileID": "efc284fa-75d9-411b-8099-56fecfdebf46"   // PDF
 // }
