@@ -294,6 +294,21 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 		return 0, fmt.Errorf("database error: %w", err)
 	}
 	if exists {
+		// Check if we can improve file type info
+		currentBlob, err := s.MetaStore.GetBlob(blobID)
+		if err == nil {
+			currentFileType, err := s.MetaStore.GetFileType(currentBlob.FileTypeID)
+			if err == nil {
+				// If current type is generic binary/octet-stream and new type is more specific
+				if currentFileType.Category == "binary" && currentFileType.Subtype == "" && fileType.Type != "binary" {
+					// Update file type
+					newFileTypeID, err := s.MetaStore.GetOrCreateFileType(fileType.ContentType, fileType.Type, fileType.Subtype)
+					if err == nil {
+						s.MetaStore.UpdateBlobFileType(blobID, newFileTypeID)
+					}
+				}
+			}
+		}
 		return blobID, nil
 	}
 

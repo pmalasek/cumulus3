@@ -238,7 +238,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "tags": {
-                    "type": "string"
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         }

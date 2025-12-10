@@ -32,7 +32,9 @@ definitions:
       subtype:
         type: string
       tags:
-        type: string
+        items:
+          type: string
+        type: array
     type: object
 host: localhost:8080
 info:

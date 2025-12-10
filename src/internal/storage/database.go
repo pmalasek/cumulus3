@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -60,12 +61,43 @@ func NewMetadataSQL(dsn string) (*MetadataSQL, error) {
 }
 
 func initSchema(db *sql.DB) error {
+	// Migration for file_types unique constraint
+	// Check if we need to migrate from UNIQUE(mime_type) to UNIQUE(mime_type, category, subtype)
+	// We can check if we can insert a duplicate mime_type (in a transaction that we rollback)
+	// Or simpler: check sqlite_master for the table definition
+	var sqlStmt string
+	err := db.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='file_types'").Scan(&sqlStmt)
+	if err == nil {
+		// Table exists
+		if !strings.Contains(sqlStmt, "UNIQUE(mime_type, category, subtype)") {
+			// Old schema detected, migrate
+			migrationQueries := []string{
+				`CREATE TABLE file_types_new (
+					id INTEGER PRIMARY KEY,
+					mime_type TEXT,
+					category TEXT,
+					subtype TEXT,
+					UNIQUE(mime_type, category, subtype)
+				);`,
+				`INSERT INTO file_types_new (id, mime_type, category, subtype) SELECT id, mime_type, category, subtype FROM file_types;`,
+				`DROP TABLE file_types;`,
+				`ALTER TABLE file_types_new RENAME TO file_types;`,
+			}
+			for _, q := range migrationQueries {
+				if _, err := db.Exec(q); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS file_types (
 			id INTEGER PRIMARY KEY,
-			mime_type TEXT UNIQUE,
+			mime_type TEXT,
 			category TEXT,
-			subtype TEXT
+			subtype TEXT,
+			UNIQUE(mime_type, category, subtype)
 		);`,
 		`CREATE TABLE IF NOT EXISTS blobs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -188,9 +220,16 @@ func (m *MetadataSQL) UpdateBlobLocation(id int64, volumeID, offset, sizeRaw, si
 	return err
 }
 
+func (m *MetadataSQL) UpdateBlobFileType(blobID int64, fileTypeID int64) error {
+	query := `UPDATE blobs SET file_type_id = ? WHERE id = ?`
+	_, err := m.db.Exec(query, fileTypeID, blobID)
+	return err
+}
+
 func (m *MetadataSQL) GetOrCreateFileType(mimeType, category, subtype string) (int64, error) {
 	var id int64
-	err := m.db.QueryRow("SELECT id FROM file_types WHERE mime_type = ?", mimeType).Scan(&id)
+	// Try to find exact match first
+	err := m.db.QueryRow("SELECT id FROM file_types WHERE mime_type = ? AND category = ? AND subtype = ?", mimeType, category, subtype).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
@@ -198,8 +237,14 @@ func (m *MetadataSQL) GetOrCreateFileType(mimeType, category, subtype string) (i
 		return 0, err
 	}
 
+	// If not found, insert new
 	res, err := m.db.Exec("INSERT INTO file_types (mime_type, category, subtype) VALUES (?, ?, ?)", mimeType, category, subtype)
 	if err != nil {
+		// If insert fails (race condition or constraint), try to select again
+		err2 := m.db.QueryRow("SELECT id FROM file_types WHERE mime_type = ? AND category = ? AND subtype = ?", mimeType, category, subtype).Scan(&id)
+		if err2 == nil {
+			return id, nil
+		}
 		return 0, err
 	}
 	return res.LastInsertId()
