@@ -17,7 +17,7 @@ paths:
     post:
       consumes:
       - multipart/form-data
-      description: Uploads a file to the storage and saves its metadata to BadgerDB
+      description: Uploads a file to the storage
       parameters:
       - description: File to upload
         in: formData
@@ -37,6 +37,10 @@ paths:
             type: string
         "400":
           description: Bad Request
+          schema:
+            type: string
+        "413":
+          description: File too large
           schema:
             type: string
         "500":

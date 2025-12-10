@@ -26,7 +26,7 @@ const docTemplate = `{
     "paths": {
         "/api/v1/files": {
             "post": {
-                "description": "Uploads a file to the storage and saves its metadata to BadgerDB",
+                "description": "Uploads a file to the storage",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -61,6 +61,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "413": {
+                        "description": "File too large",
                         "schema": {
                             "type": "string"
                         }

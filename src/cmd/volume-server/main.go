@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/joho/godotenv"
+	"github.com/pmalasek/cumulus3/docs"
 	"github.com/pmalasek/cumulus3/src/internal/api"
 	"github.com/pmalasek/cumulus3/src/internal/storage"
 	"github.com/pmalasek/cumulus3/src/internal/utils"
@@ -80,8 +81,16 @@ func main() {
 		MaxUploadSize: maxUploadSize,
 	}
 
+	// Nastavení dynamické IP pro Swagger
+	myIP := utils.GetOutboundIP()
+	port := os.Getenv("SERVER_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	docs.SwaggerInfo.Host = fmt.Sprintf("%s:%s", myIP, port)
+
 	handler := srv.Routes()
 
-	fmt.Println("🚀 Běžíme na " + os.Getenv("SERVER_ADDRESS") + ":" + os.Getenv("SERVER_PORT"))
-	http.ListenAndServe(os.Getenv("SERVER_ADDRESS")+":"+os.Getenv("SERVER_PORT"), handler)
+	fmt.Println("🚀 Běžíme na " + os.Getenv("SERVER_ADDRESS") + ":" + port)
+	http.ListenAndServe(os.Getenv("SERVER_ADDRESS")+":"+port, handler)
 }

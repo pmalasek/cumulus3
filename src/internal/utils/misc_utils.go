@@ -1,9 +1,23 @@
 package utils
 
 import (
+	"net"
 	"strconv"
 	"strings"
 )
+
+// GetOutboundIP gets the preferred outbound ip of this machine
+func GetOutboundIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "127.0.0.1"
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+
+	return localAddr.IP.String()
+}
 
 // ParseBytes parses a string representation of bytes (e.g. "10MB", "1GB") into int64
 func ParseBytes(s string) (int64, error) {

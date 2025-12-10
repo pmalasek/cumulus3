@@ -36,7 +36,7 @@ func (s *Server) Routes() http.Handler {
 
 // HandleUpload uploads a file and saves metadata
 // @Summary Upload a file
-// @Description Uploads a file to the storage and saves its metadata to BadgerDB
+// @Description Uploads a file to the storage
 // @Tags files
 // @Accept multipart/form-data
 // @Produce json
@@ -44,12 +44,22 @@ func (s *Server) Routes() http.Handler {
 // @Param tags formData string false "Comma-separated tags"
 // @Success 201 {string} string "File uploaded successfully"
 // @Failure 400 {string} string "Bad Request"
+// @Failure 413 {string} string "File too large"
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /api/v1/files [post]
 func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
-	// 1. Parse Multipart Form (max size from config)
+	// 1. Omezení velikosti requestu (Hard limit)
+	// Toto zajistí, že pokud klient pošle více dat než MaxUploadSize, spojení se ukončí/vrátí chybu.
+	r.Body = http.MaxBytesReader(w, r.Body, s.MaxUploadSize)
+
+	// ParseMultipartForm načte data. Parametr zde určuje, kolik se toho vejde do RAM.
+	// Pokud je limit MaxBytesReader stejný jako zde, vše se bude držet v RAM (nebo se to rovnou zamítne).
 	if err := r.ParseMultipartForm(s.MaxUploadSize); err != nil {
-		http.Error(w, "Could not parse multipart form", http.StatusBadRequest)
+		if err.Error() == "http: request body too large" {
+			http.Error(w, "File too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "Could not parse multipart form", http.StatusBadRequest)
+		}
 		return
 	}
 
