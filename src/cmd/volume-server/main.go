@@ -62,6 +62,11 @@ func main() {
 		}
 	}
 
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+
 	// 1. Inicializace složky pro data
 	dbDir := filepath.Dir(dbPath)
 	os.MkdirAll(dbDir, 0755)
@@ -76,10 +81,10 @@ func main() {
 	defer metaStore.Close()
 
 	// 3. Inicializace File Storage (zatím to naše jednoduché)
-	fileStore := storage.NewStore("./data", maxDataFileSize)
+	fileStore := storage.NewStore(dataDir, maxDataFileSize)
 
 	// 3b. Inicializace Metadata Loggeru (pro disaster recovery)
-	metaLogger := storage.NewMetadataLogger("./data")
+	metaLogger := storage.NewMetadataLogger(dataDir)
 
 	// 4. Inicializace API serveru (teď už mu budeme posílat i metaStore!)
 	// Pozor: Zde musíme upravit strukturu Server v api/handlers.go (viz další krok)
