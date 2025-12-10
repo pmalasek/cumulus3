@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -172,14 +173,14 @@ func (s *FileService) processStream(file io.Reader) (*streamResult, error) {
 	shouldCompress := false
 	compressionAlg := "none"
 
-	switch s.CompressionMode {
-	case "Gzip":
+	switch strings.ToLower(s.CompressionMode) {
+	case "gzip":
 		shouldCompress = true
 		compressionAlg = "gzip"
-	case "Zstd":
+	case "zstd":
 		shouldCompress = true
 		compressionAlg = "zstd"
-	case "Auto":
+	case "auto":
 		res.autoCompress = true
 		compressionAlg = "zstd"
 	}
@@ -362,4 +363,72 @@ func (s *FileService) saveFile(filename string, blobID int64, oldCumulusID *int6
 	}
 
 	return fileID, nil
+}
+
+type FileInfo struct {
+	ID             string     `json:"id"`
+	Name           string     `json:"name"`
+	BlobID         int64      `json:"blob_id"`
+	OldCumulusID   *int64     `json:"old_cumulus_id,omitempty"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	Tags           []string   `json:"tags,omitempty"`
+	Hash           string     `json:"hash"`
+	SizeRaw        int64      `json:"size_raw"`
+	SizeCompressed int64      `json:"size_compressed"`
+	CompressionAlg string     `json:"compression_alg"`
+	MimeType       string     `json:"mime_type"`
+	Category       string     `json:"category"`
+	Subtype        string     `json:"subtype"`
+	Content        string     `json:"content,omitempty"` // Base64 encoded
+}
+
+// GetFileInfo retrieves complete information about a file
+func (s *FileService) GetFileInfo(fileID string, extended bool) (*FileInfo, error) {
+	file, err := s.MetaStore.GetFile(fileID)
+	if err != nil {
+		return nil, err
+	}
+
+	blob, err := s.MetaStore.GetBlob(file.BlobID)
+	if err != nil {
+		return nil, err
+	}
+
+	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
+	if err != nil {
+		return nil, err
+	}
+
+	var tags []string
+	if file.Tags != "" {
+		tags = strings.Split(file.Tags, ",")
+	}
+
+	info := &FileInfo{
+		ID:             file.ID,
+		Name:           file.Name,
+		BlobID:         file.BlobID,
+		OldCumulusID:   file.OldCumulusID,
+		ExpiresAt:      file.ExpiresAt,
+		CreatedAt:      file.CreatedAt,
+		Tags:           tags,
+		Hash:           blob.Hash,
+		SizeRaw:        blob.SizeRaw,
+		SizeCompressed: blob.SizeCompressed,
+		CompressionAlg: blob.CompressionAlg,
+		MimeType:       fileType.MimeType,
+		Category:       fileType.Category,
+		Subtype:        fileType.Subtype,
+	}
+
+	if extended {
+		data, _, _, err := s.DownloadFile(fileID)
+		if err != nil {
+			return nil, err
+		}
+		info.Content = base64.StdEncoding.EncodeToString(data)
+	}
+
+	return info, nil
 }

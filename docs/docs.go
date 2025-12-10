@@ -24,6 +24,59 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/v1/file_info": {
+            "get": {
+                "description": "Get detailed information about a file",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "files"
+                ],
+                "summary": "Get file info",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "File ID",
+                        "name": "file_ID",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include base64 content",
+                        "name": "extended",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/service.FileInfo"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/files": {
             "post": {
                 "description": "Uploads a file to the storage",
@@ -133,6 +186,59 @@ const docTemplate = `{
                             "type": "string"
                         }
                     }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "service.FileInfo": {
+            "type": "object",
+            "properties": {
+                "blob_id": {
+                    "type": "integer"
+                },
+                "category": {
+                    "type": "string"
+                },
+                "compression_alg": {
+                    "type": "string"
+                },
+                "content": {
+                    "description": "Base64 encoded",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "hash": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "mime_type": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "old_cumulus_id": {
+                    "type": "integer"
+                },
+                "size_compressed": {
+                    "type": "integer"
+                },
+                "size_raw": {
+                    "type": "integer"
+                },
+                "subtype": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "string"
                 }
             }
         }

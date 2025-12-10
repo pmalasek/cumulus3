@@ -26,6 +26,7 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/files", s.HandleUpload)
 	mux.HandleFunc("/api/v1/files/", s.HandleDownload)
+	mux.HandleFunc("/api/v1/file_info", s.HandleFileInfo)
 	mux.HandleFunc("/docs/", httpSwagger.WrapHandler)
 	return mux
 }
@@ -166,8 +167,58 @@ func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// HandleFileInfo retrieves file information
+// @Summary Get file info
+// @Description Get detailed information about a file
+// @Tags files
+// @Produce json
+// @Param file_ID query string true "File ID"
+// @Param extended query boolean false "Include base64 content"
+// @Success 200 {object} service.FileInfo
+// @Failure 400 {string} string "Bad Request"
+// @Failure 404 {string} string "File not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /api/v1/file_info [get]
+func (s *Server) HandleFileInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	fileID := r.URL.Query().Get("file_ID")
+	if fileID == "" {
+		http.Error(w, "Missing file_ID parameter", http.StatusBadRequest)
+		return
+	}
+
+	extendedStr := r.URL.Query().Get("extended")
+	extended := false
+	if extendedStr != "" {
+		var err error
+		extended, err = strconv.ParseBool(extendedStr)
+		if err != nil {
+			http.Error(w, "Invalid extended parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
+	info, err := s.FileService.GetFileInfo(fileID, extended)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
+}
+
 // {
 //   "fileID": "f73c3c10-f516-4a6b-9f5c-daae1b42e710",
 //   "fileID": "91995bdd-9466-4ace-8183-ef02b3c0cd14",  // PDF
 //   "fileID": "efc284fa-75d9-411b-8099-56fecfdebf46"   // PDF
+//   "fileID": "8113be17-8fb2-47b6-b2c5-5a26e92b62ab"
 // }
