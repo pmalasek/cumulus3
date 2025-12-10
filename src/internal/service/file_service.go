@@ -20,15 +20,17 @@ import (
 type FileService struct {
 	Store               *storage.Store
 	MetaStore           *storage.MetadataSQL
+	Logger              *storage.MetadataLogger
 	CompressionMode     string
 	MinCompressionRatio float64
 }
 
 // NewFileService creates a new instance of FileService
-func NewFileService(store *storage.Store, metaStore *storage.MetadataSQL, compressionMode string, minCompressionRatio float64) *FileService {
+func NewFileService(store *storage.Store, metaStore *storage.MetadataSQL, logger *storage.MetadataLogger, compressionMode string, minCompressionRatio float64) *FileService {
 	return &FileService{
 		Store:               store,
 		MetaStore:           metaStore,
+		Logger:              logger,
 		CompressionMode:     compressionMode,
 		MinCompressionRatio: minCompressionRatio,
 	}
@@ -46,11 +48,12 @@ func (s *FileService) UploadFile(file io.Reader, filename string, contentType st
 
 	finalFile, sizeCompressed, alg := s.decideCompression(result)
 
-	if err := s.saveBlob(result.hash, finalFile, result.sizeRaw, sizeCompressed, alg, mimeType); err != nil {
+	blobID, err := s.saveBlob(result.hash, finalFile, result.sizeRaw, sizeCompressed, alg, mimeType)
+	if err != nil {
 		return "", err
 	}
 
-	return s.saveFile(filename, result.hash, oldCumulusID, expiresAt)
+	return s.saveFile(filename, blobID, oldCumulusID, expiresAt)
 }
 
 // determineMimeType tries to detect the MIME type from Content-Type header or filename extension
@@ -208,22 +211,43 @@ func (s *FileService) decideCompression(res *streamResult) (*os.File, int64, str
 }
 
 // saveBlob stores the file content in the volume storage if it doesn't exist yet (deduplication)
-func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompressed int64, alg, mimeType string) error {
-	exists, err := s.MetaStore.BlobExists(hash)
+func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompressed int64, alg, mimeType string) (int64, error) {
+	// 1. Check if blob exists
+	blobID, exists, err := s.MetaStore.GetBlobIDByHash(hash)
 	if err != nil {
-		return fmt.Errorf("database error: %w", err)
+		return 0, fmt.Errorf("database error: %w", err)
 	}
-
 	if exists {
-		return nil
+		return blobID, nil
 	}
 
-	file.Seek(0, 0)
-	volID, offset, _, err := s.Store.WriteBlob(file)
+	// 2. Create new blob record to get ID
+	blobID, err = s.MetaStore.CreateBlob(hash)
 	if err != nil {
-		return fmt.Errorf("storage error: %w", err)
+		return 0, fmt.Errorf("database error creating blob: %w", err)
 	}
 
+	// 3. Write to storage
+	file.Seek(0, 0)
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return 0, fmt.Errorf("error reading file for storage: %w", err)
+	}
+
+	compAlgCode := uint8(0)
+	switch alg {
+	case "gzip":
+		compAlgCode = 1
+	case "zstd":
+		compAlgCode = 2
+	}
+
+	volID, offset, err := s.Store.WriteBlob(blobID, data, compAlgCode)
+	if err != nil {
+		return 0, fmt.Errorf("storage error: %w", err)
+	}
+
+	// 4. Update blob location metadata
 	category := "unknown"
 	subtype := "unknown"
 	if parts := strings.Split(mimeType, "/"); len(parts) == 2 {
@@ -233,28 +257,24 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 
 	fileTypeID, err := s.MetaStore.GetOrCreateFileType(mimeType, category, subtype)
 	if err != nil {
-		return fmt.Errorf("metadata error: %w", err)
+		return 0, fmt.Errorf("metadata error: %w", err)
 	}
 
-	blob := storage.Blob{
-		Hash:           hash,
-		VolumeID:       volID,
-		Offset:         offset,
-		SizeRaw:        sizeRaw,
-		SizeCompressed: sizeCompressed,
-		CompressionAlg: alg,
-		FileTypeID:     fileTypeID,
+	err = s.MetaStore.UpdateBlobLocation(blobID, volID, offset, sizeRaw, sizeCompressed, alg, fileTypeID)
+	if err != nil {
+		return 0, fmt.Errorf("database error updating blob: %w", err)
 	}
-	return s.MetaStore.SaveBlob(blob)
+
+	return blobID, nil
 }
 
 // saveFile creates a new file record in the metadata database linked to the blob
-func (s *FileService) saveFile(filename, hash string, oldCumulusID *int64, expiresAt *time.Time) (string, error) {
+func (s *FileService) saveFile(filename string, blobID int64, oldCumulusID *int64, expiresAt *time.Time) (string, error) {
 	fileID := uuid.New().String()
 	fileMeta := storage.File{
 		ID:           fileID,
 		Name:         filename,
-		BlobHash:     hash,
+		BlobID:       blobID,
 		OldCumulusID: oldCumulusID,
 		ExpiresAt:    expiresAt,
 		CreatedAt:    time.Now(),
@@ -263,5 +283,14 @@ func (s *FileService) saveFile(filename, hash string, oldCumulusID *int64, expir
 	if err := s.MetaStore.SaveFile(fileMeta); err != nil {
 		return "", fmt.Errorf("metadata error: %w", err)
 	}
+
+	// Log for disaster recovery
+	if s.Logger != nil {
+		if err := s.Logger.LogFile(fileMeta); err != nil {
+			// Log error but don't fail the request
+			fmt.Fprintf(os.Stderr, "Failed to write to metadata log: %v\n", err)
+		}
+	}
+
 	return fileID, nil
 }

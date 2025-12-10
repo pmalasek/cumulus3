@@ -10,13 +10,14 @@ import (
 type File struct {
 	ID           string     `json:"id"`
 	Name         string     `json:"name"`
-	BlobHash     string     `json:"blob_hash"`
+	BlobID       int64      `json:"blob_id"`
 	OldCumulusID *int64     `json:"old_cumulus_id,omitempty"`
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 }
 
 type Blob struct {
+	ID             int64  `json:"id"`
 	Hash           string `json:"hash"`
 	VolumeID       int64  `json:"volume_id"`
 	Offset         int64  `json:"offset"`
@@ -66,7 +67,8 @@ func initSchema(db *sql.DB) error {
 			subtype TEXT
 		);`,
 		`CREATE TABLE IF NOT EXISTS blobs (
-			hash TEXT PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hash TEXT UNIQUE,
 			volume_id INTEGER,
 			offset INTEGER,
 			size_raw INTEGER,
@@ -78,11 +80,11 @@ func initSchema(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS files (
 			id TEXT PRIMARY KEY,
 			name TEXT,
-			blob_hash TEXT,
+			blob_id INTEGER,
 			old_cumulus_id INTEGER,
 			expires_at DATETIME,
 			created_at DATETIME,
-			FOREIGN KEY(blob_hash) REFERENCES blobs(hash)
+			FOREIGN KEY(blob_id) REFERENCES blobs(id)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_expires_at ON files(expires_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_old_cumulus_id ON files(old_cumulus_id);`,
@@ -102,10 +104,10 @@ func (m *MetadataSQL) Close() error {
 
 func (m *MetadataSQL) SaveFile(file File) error {
 	query := `
-	INSERT INTO files (id, name, blob_hash, old_cumulus_id, expires_at, created_at)
+	INSERT INTO files (id, name, blob_id, old_cumulus_id, expires_at, created_at)
 	VALUES (?, ?, ?, ?, ?, ?)
 	`
-	_, err := m.db.Exec(query, file.ID, file.Name, file.BlobHash, file.OldCumulusID, file.ExpiresAt, file.CreatedAt)
+	_, err := m.db.Exec(query, file.ID, file.Name, file.BlobID, file.OldCumulusID, file.ExpiresAt, file.CreatedAt)
 	return err
 }
 
@@ -118,19 +120,35 @@ func (m *MetadataSQL) CleanupExpiredFiles() (int64, error) {
 	return res.RowsAffected()
 }
 
-func (m *MetadataSQL) BlobExists(hash string) (bool, error) {
-	var exists bool
-	query := `SELECT EXISTS(SELECT 1 FROM blobs WHERE hash = ?)`
-	err := m.db.QueryRow(query, hash).Scan(&exists)
-	return exists, err
+func (m *MetadataSQL) GetBlobIDByHash(hash string) (int64, bool, error) {
+	var id int64
+	query := `SELECT id FROM blobs WHERE hash = ?`
+	err := m.db.QueryRow(query, hash).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
 }
 
-func (m *MetadataSQL) SaveBlob(blob Blob) error {
+func (m *MetadataSQL) CreateBlob(hash string) (int64, error) {
+	query := `INSERT INTO blobs (hash) VALUES (?)`
+	res, err := m.db.Exec(query, hash)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (m *MetadataSQL) UpdateBlobLocation(id int64, volumeID, offset, sizeRaw, sizeCompressed int64, compressionAlg string, fileTypeID int64) error {
 	query := `
-	INSERT INTO blobs (hash, volume_id, offset, size_raw, size_compressed, compression_alg, file_type_id)
-	VALUES (?, ?, ?, ?, ?, ?, ?)
+	UPDATE blobs 
+	SET volume_id = ?, offset = ?, size_raw = ?, size_compressed = ?, compression_alg = ?, file_type_id = ?
+	WHERE id = ?
 	`
-	_, err := m.db.Exec(query, blob.Hash, blob.VolumeID, blob.Offset, blob.SizeRaw, blob.SizeCompressed, blob.CompressionAlg, blob.FileTypeID)
+	_, err := m.db.Exec(query, volumeID, offset, sizeRaw, sizeCompressed, compressionAlg, fileTypeID, id)
 	return err
 }
 

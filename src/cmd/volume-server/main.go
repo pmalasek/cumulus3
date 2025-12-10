@@ -5,7 +5,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/pmalasek/cumulus3/docs"
@@ -61,7 +63,8 @@ func main() {
 	}
 
 	// 1. Inicializace složky pro data
-	os.MkdirAll("./data/metadata", 0755)
+	dbDir := filepath.Dir(dbPath)
+	os.MkdirAll(dbDir, 0755)
 
 	// 2. Start Metadata DB (SQLite)
 	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_sync=NORMAL", dbPath)
@@ -75,6 +78,9 @@ func main() {
 	// 3. Inicializace File Storage (zatím to naše jednoduché)
 	fileStore := storage.NewStore("./data", maxDataFileSize)
 
+	// 3b. Inicializace Metadata Loggeru (pro disaster recovery)
+	metaLogger := storage.NewMetadataLogger("./data")
+
 	// 4. Inicializace API serveru (teď už mu budeme posílat i metaStore!)
 	// Pozor: Zde musíme upravit strukturu Server v api/handlers.go (viz další krok)
 	compressionMode := os.Getenv("USE_COMPRESS")
@@ -84,6 +90,8 @@ func main() {
 
 	minCompressionRatio := 10.0
 	if val := os.Getenv("MINIMAL_COMPRESSION"); val != "" {
+		// Odstraníme případný znak % na konci
+		val = strings.TrimSuffix(val, "%")
 		if v, err := strconv.ParseFloat(val, 64); err == nil {
 			minCompressionRatio = v
 		} else {
@@ -91,7 +99,7 @@ func main() {
 		}
 	}
 
-	fileService := service.NewFileService(fileStore, metaStore, compressionMode, minCompressionRatio)
+	fileService := service.NewFileService(fileStore, metaStore, metaLogger, compressionMode, minCompressionRatio)
 
 	srv := &api.Server{
 		FileService:   fileService,
