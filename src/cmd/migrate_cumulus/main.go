@@ -119,10 +119,11 @@ func main() {
 	}
 
 	type MigrationFile struct {
-		FID      int64
-		Filename string
-		RawID    int64
-		Tags     string
+		FID         int64
+		Filename    string
+		RawID       int64
+		Tags        string
+		ContentType string
 	}
 
 	var filesToMigrate []MigrationFile
@@ -145,11 +146,17 @@ func main() {
 			tags = labels.String
 		}
 
+		contentType := ""
+		if rawFileType.Valid {
+			contentType = rawFileType.String
+		}
+
 		filesToMigrate = append(filesToMigrate, MigrationFile{
-			FID:      fID,
-			Filename: filename,
-			RawID:    rawID,
-			Tags:     tags,
+			FID:         fID,
+			Filename:    filename,
+			RawID:       rawID,
+			Tags:        tags,
+			ContentType: contentType,
 		})
 	}
 	rows.Close()
@@ -199,7 +206,7 @@ func main() {
 
 		log.Printf("Migrating file: %s (ID: %d, RawID: %d)", cleanFilename, mFile.FID, mFile.RawID)
 
-		_, err = fileService.UploadFile(bz2Reader, cleanFilename, "", &oldID, nil, mFile.Tags)
+		_, err = fileService.UploadFile(bz2Reader, cleanFilename, mFile.ContentType, &oldID, nil, mFile.Tags)
 		file.Close() // Close file after upload
 
 		if err != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pmalasek/cumulus3/src/internal/storage"
+	"github.com/pmalasek/cumulus3/src/internal/utils"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -39,17 +40,36 @@ func NewFileService(store *storage.Store, metaStore *storage.MetadataSQL, logger
 
 // UploadFile handles the entire file upload process: streaming, compression, deduplication, and metadata storage
 func (s *FileService) UploadFile(file io.Reader, filename string, contentType string, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, error) {
-	mimeType := s.determineMimeType(filename, contentType)
-
 	result, err := s.processStream(file)
 	if err != nil {
 		return "", err
 	}
 	defer result.cleanup()
 
+	// Detect file type
+	// Read first 12KB for detection
+	detectBuffer := make([]byte, 12000)
+	result.tempFile.Seek(0, 0)
+	n, _ := io.ReadFull(result.tempFile, detectBuffer)
+	fileType := utils.DetectFileType(detectBuffer[:n])
+
+	// If detection returned generic binary, try to use provided content type or extension
+	if fileType.Type == "binary" && fileType.Subtype == "" {
+		mimeType := s.determineMimeType(filename, contentType)
+		if mimeType != "application/octet-stream" {
+			fileType.ContentType = mimeType
+			// Try to guess category/subtype from mimeType
+			parts := strings.Split(mimeType, "/")
+			if len(parts) == 2 {
+				fileType.Type = parts[0]
+				fileType.Subtype = parts[1]
+			}
+		}
+	}
+
 	finalFile, sizeCompressed, alg := s.decideCompression(result)
 
-	blobID, err := s.saveBlob(result.hash, finalFile, result.sizeRaw, sizeCompressed, alg, mimeType)
+	blobID, err := s.saveBlob(result.hash, finalFile, result.sizeRaw, sizeCompressed, alg, fileType)
 	if err != nil {
 		return "", err
 	}
@@ -266,7 +286,7 @@ func (s *FileService) decideCompression(res *streamResult) (*os.File, int64, str
 }
 
 // saveBlob stores the file content in the volume storage if it doesn't exist yet (deduplication)
-func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompressed int64, alg, mimeType string) (int64, error) {
+func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompressed int64, alg string, fileType utils.FileTypeResult) (int64, error) {
 	// 1. Check if blob exists
 	blobID, exists, err := s.MetaStore.GetBlobIDByHash(hash)
 	if err != nil {
@@ -303,14 +323,7 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 	}
 
 	// 4. Update blob location metadata
-	category := "unknown"
-	subtype := "unknown"
-	if parts := strings.Split(mimeType, "/"); len(parts) == 2 {
-		category = parts[0]
-		subtype = parts[1]
-	}
-
-	fileTypeID, err := s.MetaStore.GetOrCreateFileType(mimeType, category, subtype)
+	fileTypeID, err := s.MetaStore.GetOrCreateFileType(fileType.ContentType, fileType.Type, fileType.Subtype)
 	if err != nil {
 		return 0, fmt.Errorf("metadata error: %w", err)
 	}
