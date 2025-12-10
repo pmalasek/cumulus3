@@ -37,7 +37,7 @@ func NewFileService(store *storage.Store, metaStore *storage.MetadataSQL, logger
 }
 
 // UploadFile handles the entire file upload process: streaming, compression, deduplication, and metadata storage
-func (s *FileService) UploadFile(file io.Reader, filename string, contentType string, oldCumulusID *int64, expiresAt *time.Time) (string, error) {
+func (s *FileService) UploadFile(file io.Reader, filename string, contentType string, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, error) {
 	mimeType := s.determineMimeType(filename, contentType)
 
 	result, err := s.processStream(file)
@@ -53,7 +53,7 @@ func (s *FileService) UploadFile(file io.Reader, filename string, contentType st
 		return "", err
 	}
 
-	return s.saveFile(filename, blobID, oldCumulusID, expiresAt)
+	return s.saveFile(filename, blobID, oldCumulusID, expiresAt, tags)
 }
 
 // determineMimeType tries to detect the MIME type from Content-Type header or filename extension
@@ -269,7 +269,7 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 }
 
 // saveFile creates a new file record in the metadata database linked to the blob
-func (s *FileService) saveFile(filename string, blobID int64, oldCumulusID *int64, expiresAt *time.Time) (string, error) {
+func (s *FileService) saveFile(filename string, blobID int64, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, error) {
 	fileID := uuid.New().String()
 	fileMeta := storage.File{
 		ID:           fileID,
@@ -278,6 +278,7 @@ func (s *FileService) saveFile(filename string, blobID int64, oldCumulusID *int6
 		OldCumulusID: oldCumulusID,
 		ExpiresAt:    expiresAt,
 		CreatedAt:    time.Now(),
+		Tags:         tags,
 	}
 
 	if err := s.MetaStore.SaveFile(fileMeta); err != nil {

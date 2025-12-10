@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -78,9 +79,11 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		expiresAt = &exp
 	}
-	fmt.Printf("DATA : %s %v %v\n", header.Filename, oldCumulusID, expiresAt)
+
+	cleanFilename := filepath.Base(header.Filename)
+	fmt.Printf("DATA : %s %v %v\n", cleanFilename, oldCumulusID, expiresAt)
 	// Call FileService
-	fileID, err := s.FileService.UploadFile(file, header.Filename, header.Header.Get("Content-Type"), oldCumulusID, expiresAt)
+	fileID, err := s.FileService.UploadFile(file, cleanFilename, header.Header.Get("Content-Type"), oldCumulusID, expiresAt, "")
 	if err != nil {
 		// We should probably log the error and return 500
 		// For now, just return 500

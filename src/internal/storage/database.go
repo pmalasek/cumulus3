@@ -14,6 +14,7 @@ type File struct {
 	OldCumulusID *int64     `json:"old_cumulus_id,omitempty"`
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
+	Tags         string     `json:"tags,omitempty"`
 }
 
 type Blob struct {
@@ -84,6 +85,7 @@ func initSchema(db *sql.DB) error {
 			old_cumulus_id INTEGER,
 			expires_at DATETIME,
 			created_at DATETIME,
+			tags TEXT,
 			FOREIGN KEY(blob_id) REFERENCES blobs(id)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_expires_at ON files(expires_at);`,
@@ -95,6 +97,10 @@ func initSchema(db *sql.DB) error {
 			return err
 		}
 	}
+
+	// Migration: Add tags column if not exists
+	_, _ = db.Exec("ALTER TABLE files ADD COLUMN tags TEXT")
+
 	return nil
 }
 
@@ -104,10 +110,10 @@ func (m *MetadataSQL) Close() error {
 
 func (m *MetadataSQL) SaveFile(file File) error {
 	query := `
-	INSERT INTO files (id, name, blob_id, old_cumulus_id, expires_at, created_at)
-	VALUES (?, ?, ?, ?, ?, ?)
+	INSERT INTO files (id, name, blob_id, old_cumulus_id, expires_at, created_at, tags)
+	VALUES (?, ?, ?, ?, ?, ?, ?)
 	`
-	_, err := m.db.Exec(query, file.ID, file.Name, file.BlobID, file.OldCumulusID, file.ExpiresAt, file.CreatedAt)
+	_, err := m.db.Exec(query, file.ID, file.Name, file.BlobID, file.OldCumulusID, file.ExpiresAt, file.CreatedAt, file.Tags)
 	return err
 }
 
@@ -167,4 +173,13 @@ func (m *MetadataSQL) GetOrCreateFileType(mimeType, category, subtype string) (i
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+func (m *MetadataSQL) FileExistsByOldID(oldID int64) (bool, error) {
+	var count int
+	err := m.db.QueryRow("SELECT count(*) FROM files WHERE old_cumulus_id = ?", oldID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }

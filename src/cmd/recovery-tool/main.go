@@ -23,7 +23,7 @@ type BlobLocation struct {
 }
 
 func main() {
-	dataPath := flag.String("src", "./data", "Cesta ke zdrojovým datům (kde jsou volume_*.dat a files.bin)")
+	dataPath := flag.String("src", "./data", "Cesta ke zdrojovým datům (kde jsou volume_*.dat a files_metadata.bin)")
 	restorePath := flag.String("dst", "./restored", "Cesta, kam se mají obnovit soubory")
 	flag.Parse()
 
@@ -39,7 +39,7 @@ func main() {
 	}
 	fmt.Printf("✅ Nalezeno %d unikátních blobů.\n", len(blobMap))
 
-	fmt.Println("📂 Začínám obnovu souborů z files.bin...")
+	fmt.Println("📂 Začínám obnovu souborů z files_metadata.bin...")
 	count, err := restoreFiles(*dataPath, *restorePath, blobMap)
 	if err != nil {
 		log.Fatalf("Chyba při obnově: %v", err)
@@ -170,12 +170,21 @@ func scanDatFile(file string, index map[int64]BlobLocation) {
 	}
 }
 
-// restoreFiles čte files.bin a obnovuje soubory
+// restoreFiles čte files_metadata.bin a obnovuje soubory
 func restoreFiles(srcDir, dstDir string, blobIndex map[int64]BlobLocation) (int, error) {
-	logPath := filepath.Join(srcDir, "files.bin")
+	logPath := filepath.Join(srcDir, "files_metadata.bin")
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		// Fallback to old name
+		logPathLegacy := filepath.Join(srcDir, "files.bin")
+		if _, err := os.Stat(logPathLegacy); err == nil {
+			fmt.Println("⚠️  files_metadata.bin nenalezen, používám starý files.bin")
+			logPath = logPathLegacy
+		}
+	}
+
 	f, err := os.Open(logPath)
 	if err != nil {
-		return 0, fmt.Errorf("nelze otevřít files.bin: %w", err)
+		return 0, fmt.Errorf("nelze otevřít metadata soubor: %w", err)
 	}
 	defer f.Close()
 
@@ -229,6 +238,10 @@ func restoreFiles(srcDir, dstDir string, blobIndex map[int64]BlobLocation) (int,
 		if flags&(1<<1) != 0 { // ExpiresAt
 			cursor += 8
 		}
+		if flags&(1<<2) != 0 { // Tags
+			tagsLen := binary.BigEndian.Uint16(record[cursor : cursor+2])
+			cursor += 2 + int(tagsLen)
+		}
 
 		// Name Len (2)
 		nameLen := binary.BigEndian.Uint16(record[cursor : cursor+2])
@@ -273,6 +286,12 @@ func extractFile(dstDir, filename string, loc BlobLocation, zstdDecoder *zstd.De
 
 	// Připravit výstupní soubor
 	outPath := filepath.Join(dstDir, filename)
+
+	// Zajistit existenci složky
+	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+		return err
+	}
+
 	outFile, err := os.Create(outPath)
 	if err != nil {
 		return err

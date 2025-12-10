@@ -19,7 +19,7 @@ func NewMetadataLogger(baseDir string) *MetadataLogger {
 	_ = os.MkdirAll(baseDir, 0755)
 
 	return &MetadataLogger{
-		LogPath: filepath.Join(baseDir, "files.bin"),
+		LogPath: filepath.Join(baseDir, "files_metadata.bin"),
 	}
 }
 
@@ -57,6 +57,9 @@ func (l *MetadataLogger) LogFile(f File) error {
 	if f.ExpiresAt != nil {
 		flags |= 1 << 1 // Bit 1 set
 	}
+	if f.Tags != "" {
+		flags |= 1 << 2 // Bit 2 set
+	}
 	buf = append(buf, flags)
 
 	if f.OldCumulusID != nil {
@@ -64,6 +67,11 @@ func (l *MetadataLogger) LogFile(f File) error {
 	}
 	if f.ExpiresAt != nil {
 		buf = binary.BigEndian.AppendUint64(buf, uint64(f.ExpiresAt.UnixNano()))
+	}
+	if f.Tags != "" {
+		tagsBytes := []byte(f.Tags)
+		buf = binary.BigEndian.AppendUint16(buf, uint16(len(tagsBytes)))
+		buf = append(buf, tagsBytes...)
 	}
 
 	// 5. Name
