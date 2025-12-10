@@ -41,9 +41,15 @@ func NewFileService(store *storage.Store, metaStore *storage.MetadataSQL, logger
 
 // UploadFile handles the entire file upload process: streaming, compression, deduplication, and metadata storage
 func (s *FileService) UploadFile(file io.Reader, filename string, contentType string, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, error) {
+	id, _, err := s.UploadFileWithDedup(file, filename, contentType, oldCumulusID, expiresAt, tags)
+	return id, err
+}
+
+// UploadFileWithDedup handles the entire file upload process and returns deduplication status
+func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, contentType string, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, bool, error) {
 	result, err := s.processStream(file)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer result.cleanup()
 
@@ -70,12 +76,13 @@ func (s *FileService) UploadFile(file io.Reader, filename string, contentType st
 
 	finalFile, sizeCompressed, alg := s.decideCompression(result)
 
-	blobID, err := s.saveBlob(result.hash, finalFile, result.sizeRaw, sizeCompressed, alg, fileType)
+	blobID, isDedup, err := s.saveBlob(result.hash, finalFile, result.sizeRaw, sizeCompressed, alg, fileType)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
-	return s.saveFile(filename, blobID, oldCumulusID, expiresAt, tags)
+	fileID, err := s.saveFile(filename, blobID, oldCumulusID, expiresAt, tags)
+	return fileID, isDedup, err
 }
 
 // DownloadFile retrieves a file by its ID, handling decompression if necessary
@@ -341,11 +348,11 @@ func (s *FileService) decideCompression(res *streamResult) (*os.File, int64, str
 }
 
 // saveBlob stores the file content in the volume storage if it doesn't exist yet (deduplication)
-func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompressed int64, alg string, fileType utils.FileTypeResult) (int64, error) {
+func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompressed int64, alg string, fileType utils.FileTypeResult) (int64, bool, error) {
 	// 1. Check if blob exists
 	blobID, exists, err := s.MetaStore.GetBlobIDByHash(hash)
 	if err != nil {
-		return 0, fmt.Errorf("database error: %w", err)
+		return 0, false, fmt.Errorf("database error: %w", err)
 	}
 	if exists {
 		// Check if we can improve file type info
@@ -363,20 +370,20 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 				}
 			}
 		}
-		return blobID, nil
+		return blobID, true, nil
 	}
 
 	// 2. Create new blob record to get ID
 	blobID, err = s.MetaStore.CreateBlob(hash)
 	if err != nil {
-		return 0, fmt.Errorf("database error creating blob: %w", err)
+		return 0, false, fmt.Errorf("database error creating blob: %w", err)
 	}
 
 	// 3. Write to storage
 	file.Seek(0, 0)
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return 0, fmt.Errorf("error reading file for storage: %w", err)
+		return 0, false, fmt.Errorf("error reading file for storage: %w", err)
 	}
 
 	compAlgCode := uint8(0)
@@ -389,21 +396,21 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 
 	volID, offset, err := s.Store.WriteBlob(blobID, data, compAlgCode)
 	if err != nil {
-		return 0, fmt.Errorf("storage error: %w", err)
+		return 0, false, fmt.Errorf("storage error: %w", err)
 	}
 
 	// 4. Update blob location metadata
 	fileTypeID, err := s.MetaStore.GetOrCreateFileType(fileType.ContentType, fileType.Type, fileType.Subtype)
 	if err != nil {
-		return 0, fmt.Errorf("metadata error: %w", err)
+		return 0, false, fmt.Errorf("metadata error: %w", err)
 	}
 
 	err = s.MetaStore.UpdateBlobLocation(blobID, volID, offset, sizeRaw, sizeCompressed, alg, fileTypeID)
 	if err != nil {
-		return 0, fmt.Errorf("database error updating blob: %w", err)
+		return 0, false, fmt.Errorf("database error updating blob: %w", err)
 	}
 
-	return blobID, nil
+	return blobID, false, nil
 }
 
 // saveFile creates a new file record in the metadata database linked to the blob

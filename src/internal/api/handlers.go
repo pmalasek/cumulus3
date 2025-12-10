@@ -13,6 +13,8 @@ import (
 	_ "github.com/pmalasek/cumulus3/docs"
 	"github.com/pmalasek/cumulus3/src/internal/service"
 	"github.com/pmalasek/cumulus3/src/internal/utils"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
@@ -24,6 +26,7 @@ type Server struct {
 // Routes vytvoří router a zaregistruje cesty
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/v2/files/upload", s.HandleUpload)
 	mux.HandleFunc("/v2/files/", s.HandleDownload)
 	mux.HandleFunc("/v2/files/info/", s.HandleFileInfo)
@@ -49,6 +52,9 @@ func (s *Server) Routes() http.Handler {
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /v2/files/upload [post]
 func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
+	timer := prometheus.NewTimer(uploadDuration)
+	defer timer.ObserveDuration()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -103,13 +109,27 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	cleanFilename := filepath.Base(header.Filename)
 	fmt.Printf("DATA : %s %v %v %s\n", cleanFilename, oldCumulusID, expiresAt, tagsStr)
+
+	// Determine file type for metrics
+	contentType := header.Header.Get("Content-Type")
+	fileTypeLabel := "unknown"
+	if parts := strings.Split(contentType, "/"); len(parts) > 0 {
+		fileTypeLabel = parts[0]
+	}
+
 	// Call FileService
-	fileID, err := s.FileService.UploadFile(file, cleanFilename, header.Header.Get("Content-Type"), oldCumulusID, expiresAt, tagsStr)
+	fileID, isDedup, err := s.FileService.UploadFileWithDedup(file, cleanFilename, contentType, oldCumulusID, expiresAt, tagsStr)
 	if err != nil {
+		uploadOpsTotal.WithLabelValues("error", fileTypeLabel).Inc()
 		// We should probably log the error and return 500
 		// For now, just return 500
 		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	uploadOpsTotal.WithLabelValues("success", fileTypeLabel).Inc()
+	if isDedup {
+		dedupHitsTotal.Inc()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
