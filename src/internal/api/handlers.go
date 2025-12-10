@@ -113,9 +113,44 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"fileID": fileID})
 }
 
+// HandleDownload downloads a file
+// @Summary Download a file
+// @Description Downloads a file by its ID
+// @Tags files
+// @Produce octet-stream
+// @Param id path string true "File ID"
+// @Success 200 {file} file "File content"
+// @Failure 404 {string} string "File not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /api/v1/files/{id} [get]
 func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
-	// Placeholder
-	w.WriteHeader(http.StatusNotImplemented)
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract ID from URL
+	// URL is /api/v1/files/{id}
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/files/")
+	if id == "" || id == "/" {
+		http.Error(w, "Missing file ID", http.StatusBadRequest)
+		return
+	}
+
+	data, filename, mimeType, err := s.FileService.DownloadFile(id)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Write(data)
 }
 
 // {

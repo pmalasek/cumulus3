@@ -60,4 +60,31 @@ paths:
       summary: Upload a file
       tags:
       - files
+  /api/v1/files/{id}:
+    get:
+      description: Downloads a file by its ID
+      parameters:
+      - description: File ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: File content
+          schema:
+            type: file
+        "404":
+          description: File not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Download a file
+      tags:
+      - files
 swagger: "2.0"

@@ -148,6 +148,36 @@ func (m *MetadataSQL) CreateBlob(hash string) (int64, error) {
 	return res.LastInsertId()
 }
 
+func (m *MetadataSQL) GetFile(id string) (File, error) {
+	var f File
+	query := `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags FROM files WHERE id = ?`
+	err := m.db.QueryRow(query, id).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
+	if err != nil {
+		return File{}, err
+	}
+	return f, nil
+}
+
+func (m *MetadataSQL) GetBlob(id int64) (Blob, error) {
+	var b Blob
+	query := `SELECT id, hash, volume_id, offset, size_raw, size_compressed, compression_alg, file_type_id FROM blobs WHERE id = ?`
+	err := m.db.QueryRow(query, id).Scan(&b.ID, &b.Hash, &b.VolumeID, &b.Offset, &b.SizeRaw, &b.SizeCompressed, &b.CompressionAlg, &b.FileTypeID)
+	if err != nil {
+		return Blob{}, err
+	}
+	return b, nil
+}
+
+func (m *MetadataSQL) GetFileType(id int64) (FileType, error) {
+	var ft FileType
+	query := `SELECT id, mime_type, category, subtype FROM file_types WHERE id = ?`
+	err := m.db.QueryRow(query, id).Scan(&ft.ID, &ft.MimeType, &ft.Category, &ft.Subtype)
+	if err != nil {
+		return FileType{}, err
+	}
+	return ft, nil
+}
+
 func (m *MetadataSQL) UpdateBlobLocation(id int64, volumeID, offset, sizeRaw, sizeCompressed int64, compressionAlg string, fileTypeID int64) error {
 	query := `
 	UPDATE blobs 

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/hex"
 	"fmt"
@@ -54,6 +55,60 @@ func (s *FileService) UploadFile(file io.Reader, filename string, contentType st
 	}
 
 	return s.saveFile(filename, blobID, oldCumulusID, expiresAt, tags)
+}
+
+// DownloadFile retrieves a file by its ID, handling decompression if necessary
+func (s *FileService) DownloadFile(fileID string) ([]byte, string, string, error) {
+	file, err := s.MetaStore.GetFile(fileID)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("file not found: %w", err)
+	}
+
+	blob, err := s.MetaStore.GetBlob(file.BlobID)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("blob not found: %w", err)
+	}
+
+	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("file type not found: %w", err)
+	}
+
+	data, err := s.Store.ReadBlob(blob.VolumeID, blob.Offset, blob.SizeCompressed)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("error reading blob: %w", err)
+	}
+
+	// Decompress if needed
+	var decompressedData []byte
+	switch blob.CompressionAlg {
+	case "gzip":
+		reader, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, "", "", fmt.Errorf("gzip error: %w", err)
+		}
+		defer reader.Close()
+		decompressedData, err = io.ReadAll(reader)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("gzip read error: %w", err)
+		}
+	case "zstd":
+		decoder, err := zstd.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, "", "", fmt.Errorf("zstd error: %w", err)
+		}
+		defer decoder.Close()
+		decompressedData, err = io.ReadAll(decoder)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("zstd read error: %w", err)
+		}
+	case "none", "":
+		decompressedData = data
+	default:
+		return nil, "", "", fmt.Errorf("unknown compression algorithm: %s", blob.CompressionAlg)
+	}
+
+	return decompressedData, file.Name, fileType.MimeType, nil
 }
 
 // determineMimeType tries to detect the MIME type from Content-Type header or filename extension
