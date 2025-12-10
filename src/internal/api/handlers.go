@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -35,7 +36,7 @@ func (s *Server) Routes() http.Handler {
 // @Param file formData file true "File to upload"
 // @Param old_cumulus_id formData int false "Legacy ID"
 // @Param validity formData string false "Validity period (e.g. '1 day', '2 months')"
-// @Success 201 {string} string "File uploaded successfully"
+// @Success 201 {object} map[string]string "File uploaded successfully"
 // @Failure 400 {string} string "Bad Request"
 // @Failure 413 {string} string "File too large"
 // @Failure 500 {string} string "Internal Server Error"
@@ -77,7 +78,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		expiresAt = &exp
 	}
-
+	fmt.Printf("DATA : %s %v %v\n", header.Filename, oldCumulusID, expiresAt)
 	// Call FileService
 	fileID, err := s.FileService.UploadFile(file, header.Filename, header.Header.Get("Content-Type"), oldCumulusID, expiresAt)
 	if err != nil {
@@ -87,8 +88,9 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, "File uploaded successfully. ID: %s", fileID)
+	json.NewEncoder(w).Encode(map[string]string{"fileID": fileID})
 }
 
 func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {

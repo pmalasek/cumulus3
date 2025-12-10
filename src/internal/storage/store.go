@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
@@ -22,14 +23,36 @@ type Store struct {
 	BaseDir         string
 	MaxDataFileSize int64
 	mu              sync.Mutex
+	CurrentVolumeID int64
 }
 
 // NewStore vytvoří novou instanci a připraví složku
 func NewStore(dir string, maxDataFileSize int64) *Store {
 	_ = os.MkdirAll(dir, 0755)
+
+	// Find the latest volume ID
+	var currentVolumeID int64 = 1
+	for {
+		filename := fmt.Sprintf("volume_%08d.dat", currentVolumeID)
+		fullPath := filepath.Join(dir, filename)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			if currentVolumeID > 1 {
+				// Check if the previous volume is full?
+				// Actually, we can just start writing to the previous one if it exists,
+				// and WriteBlob will handle rotation if it's full.
+				// But wait, if loop breaks, it means volume_X does not exist.
+				// So the last existing one is X-1.
+				currentVolumeID--
+			}
+			break
+		}
+		currentVolumeID++
+	}
+
 	return &Store{
 		BaseDir:         dir,
 		MaxDataFileSize: maxDataFileSize,
+		CurrentVolumeID: currentVolumeID,
 	}
 }
 
@@ -57,10 +80,22 @@ func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volu
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// TODO: Implementovat rotaci volume souborů
-	volumeID = 1
-	filename := "volume_1.dat"
+	dataSize := int64(len(data))
+	totalEntrySize := int64(HeaderSize) + dataSize + int64(FooterSize)
+
+	filename := fmt.Sprintf("volume_%08d.dat", s.CurrentVolumeID)
 	fullPath := filepath.Join(s.BaseDir, filename)
+
+	// Check if we need to rotate
+	if stat, err := os.Stat(fullPath); err == nil {
+		if stat.Size()+totalEntrySize > s.MaxDataFileSize {
+			s.CurrentVolumeID++
+			filename = fmt.Sprintf("volume_%08d.dat", s.CurrentVolumeID)
+			fullPath = filepath.Join(s.BaseDir, filename)
+		}
+	}
+
+	volumeID = s.CurrentVolumeID
 
 	f, err := os.OpenFile(fullPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -73,8 +108,6 @@ func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volu
 		return 0, 0, err
 	}
 	offset = stat.Size()
-
-	dataSize := int64(len(data))
 
 	// Výpočet CRC (pro integritu)
 	crc := crc32.ChecksumIEEE(data)
@@ -107,7 +140,7 @@ func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volu
 
 	// 4. Zápis do META souboru (Index)
 	// Formát: BlobID(8) + Offset(8) + Size(8) + Comp(1) + CRC(4) = 29 bytes
-	metaFilename := "volume_1.meta"
+	metaFilename := fmt.Sprintf("volume_%08d.meta", volumeID)
 	metaPath := filepath.Join(s.BaseDir, metaFilename)
 	mf, err := os.OpenFile(metaPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -132,11 +165,17 @@ func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volu
 
 // ReadBlob přečte data z volume souboru
 func (s *Store) ReadBlob(volumeID int64, offset int64, size int64) ([]byte, error) {
-	// TODO: Mapování volumeID -> filename
-	filename := "volume_1.dat"
+	filename := fmt.Sprintf("volume_%08d.dat", volumeID)
 	fullPath := filepath.Join(s.BaseDir, filename)
 
 	f, err := os.Open(fullPath)
+	if os.IsNotExist(err) {
+		// Fallback for legacy filenames
+		filenameLegacy := fmt.Sprintf("volume_%d.dat", volumeID)
+		fullPathLegacy := filepath.Join(s.BaseDir, filenameLegacy)
+		f, err = os.Open(fullPathLegacy)
+	}
+
 	if err != nil {
 		return nil, err
 	}

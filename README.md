@@ -21,6 +21,7 @@ go build ./...
 ## Instalace
 
 ```bash
+go mod tidy
 go install github.com/air-verse/air@latest
 go install github.com/swaggo/swag/cmd/swag@latest
 ```
