@@ -258,3 +258,13 @@ func (m *MetadataSQL) FileExistsByOldID(oldID int64) (bool, error) {
 	}
 	return count > 0, nil
 }
+
+func (m *MetadataSQL) GetFileByOldID(oldID int64) (File, error) {
+	var f File
+	query := `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags FROM files WHERE old_cumulus_id = ?`
+	err := m.db.QueryRow(query, oldID).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
+	if err != nil {
+		return File{}, err
+	}
+	return f, nil
+}

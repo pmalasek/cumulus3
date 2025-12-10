@@ -24,22 +24,63 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/api/v1/file_info": {
+        "/base/files/id/{id}": {
             "get": {
-                "description": "Get detailed information about a file",
+                "description": "Downloads a file by its old Cumulus ID",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "files"
+                ],
+                "summary": "Download a file by old ID",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Old Cumulus ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "File content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/base/files/info/{id}": {
+            "get": {
+                "description": "Get detailed information about a file by its old Cumulus ID",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "files"
                 ],
-                "summary": "Get file info",
+                "summary": "Get file info by old ID",
                 "parameters": [
                     {
-                        "type": "string",
-                        "description": "File ID",
-                        "name": "file_ID",
-                        "in": "query",
+                        "type": "integer",
+                        "description": "Old Cumulus ID",
+                        "name": "id",
+                        "in": "path",
                         "required": true
                     },
                     {
@@ -77,7 +118,60 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/files": {
+        "/v2/files/info/{id}": {
+            "get": {
+                "description": "Get detailed information about a file",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "files"
+                ],
+                "summary": "Get file info",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "File ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include base64 content",
+                        "name": "extended",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/service.FileInfo"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/v2/files/upload": {
             "post": {
                 "description": "Uploads a file to the storage",
                 "consumes": [
@@ -148,7 +242,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/v1/files/{id}": {
+        "/v2/files/{id}": {
             "get": {
                 "description": "Downloads a file by its ID",
                 "produces": [
