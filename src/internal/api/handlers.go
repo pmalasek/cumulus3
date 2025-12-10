@@ -1,28 +1,19 @@
 package api
 
 import (
-	"compress/gzip"
-	"encoding/hex"
 	"fmt"
-	"io"
-	"mime"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	_ "github.com/pmalasek/cumulus3/docs"
-	"github.com/pmalasek/cumulus3/src/internal/storage"
+	"github.com/pmalasek/cumulus3/src/internal/service"
 	httpSwagger "github.com/swaggo/http-swagger"
-	"golang.org/x/crypto/blake2b"
 )
 
 type Server struct {
-	Store         *storage.Store
-	MetaStore     *storage.MetadataSQL
+	FileService   *service.FileService
 	MaxUploadSize int64
 }
 
@@ -87,104 +78,12 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		expiresAt = &exp
 	}
 
-	// Pipeline: Stream -> Hasher + GZIP
-	hasher, _ := blake2b.New256(nil)
-
-	// Use a temporary file for the compressed output
-	tempFile, err := os.CreateTemp("", "upload-*")
+	// Call FileService
+	fileID, err := s.FileService.UploadFile(file, header.Filename, header.Header.Get("Content-Type"), oldCumulusID, expiresAt)
 	if err != nil {
-		http.Error(w, "Internal error", http.StatusInternalServerError)
-		return
-	}
-	defer os.Remove(tempFile.Name()) // Clean up
-	defer tempFile.Close()
-
-	gzipW := gzip.NewWriter(tempFile)
-	multiW := io.MultiWriter(hasher, gzipW)
-
-	sizeRaw, err := io.Copy(multiW, file)
-	if err != nil {
-		http.Error(w, "Error processing file", http.StatusInternalServerError)
-		return
-	}
-	gzipW.Close() // Flush gzip
-	tempFile.Sync()
-
-	hash := hex.EncodeToString(hasher.Sum(nil))
-
-	// Check deduplication
-	exists, err := s.MetaStore.BlobExists(hash)
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	if !exists {
-		// Write to Volume
-		// Rewind temp file
-		tempFile.Seek(0, 0)
-
-		// Get compressed size
-		stat, _ := tempFile.Stat()
-		sizeCompressed := stat.Size()
-
-		volID, offset, _, err := s.Store.WriteBlob(tempFile)
-		if err != nil {
-			http.Error(w, "Storage error", http.StatusInternalServerError)
-			return
-		}
-
-		// Determine File Type
-		mimeType := header.Header.Get("Content-Type")
-		if mimeType == "" {
-			mimeType = mime.TypeByExtension(filepath.Ext(header.Filename))
-			if mimeType == "" {
-				mimeType = "application/octet-stream"
-			}
-		}
-		// Simple category/subtype parsing
-		category := "unknown"
-		subtype := "unknown"
-		if parts := strings.Split(mimeType, "/"); len(parts) == 2 {
-			category = parts[0]
-			subtype = parts[1]
-		}
-
-		fileTypeID, err := s.MetaStore.GetOrCreateFileType(mimeType, category, subtype)
-		if err != nil {
-			http.Error(w, "Metadata error", http.StatusInternalServerError)
-			return
-		}
-
-		// Save Blob
-		blob := storage.Blob{
-			Hash:           hash,
-			VolumeID:       volID,
-			Offset:         offset,
-			SizeRaw:        sizeRaw,
-			SizeCompressed: sizeCompressed,
-			CompressionAlg: "gzip",
-			FileTypeID:     fileTypeID,
-		}
-		if err := s.MetaStore.SaveBlob(blob); err != nil {
-			http.Error(w, "Metadata error", http.StatusInternalServerError)
-			return
-		}
-	}
-
-	// Save File
-	fileID := uuid.New().String()
-	fileMeta := storage.File{
-		ID:           fileID,
-		Name:         header.Filename,
-		BlobHash:     hash,
-		OldCumulusID: oldCumulusID,
-		ExpiresAt:    expiresAt,
-		CreatedAt:    time.Now(),
-	}
-
-	if err := s.MetaStore.SaveFile(fileMeta); err != nil {
-		http.Error(w, "Metadata error", http.StatusInternalServerError)
+		// We should probably log the error and return 500
+		// For now, just return 500
+		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 

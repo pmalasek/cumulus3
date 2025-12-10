@@ -5,10 +5,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/joho/godotenv"
 	"github.com/pmalasek/cumulus3/docs"
 	"github.com/pmalasek/cumulus3/src/internal/api"
+	"github.com/pmalasek/cumulus3/src/internal/service"
 	"github.com/pmalasek/cumulus3/src/internal/storage"
 	"github.com/pmalasek/cumulus3/src/internal/utils"
 )
@@ -75,9 +77,24 @@ func main() {
 
 	// 4. Inicializace API serveru (teď už mu budeme posílat i metaStore!)
 	// Pozor: Zde musíme upravit strukturu Server v api/handlers.go (viz další krok)
+	compressionMode := os.Getenv("USE_COMPRESS")
+	if compressionMode == "" {
+		compressionMode = "Auto"
+	}
+
+	minCompressionRatio := 10.0
+	if val := os.Getenv("MINIMAL_COMPRESSION"); val != "" {
+		if v, err := strconv.ParseFloat(val, 64); err == nil {
+			minCompressionRatio = v
+		} else {
+			log.Printf("Invalid MINIMAL_COMPRESSION format: %v, using default 10%%", err)
+		}
+	}
+
+	fileService := service.NewFileService(fileStore, metaStore, compressionMode, minCompressionRatio)
+
 	srv := &api.Server{
-		Store:         fileStore,
-		MetaStore:     metaStore,
+		FileService:   fileService,
 		MaxUploadSize: maxUploadSize,
 	}
 
