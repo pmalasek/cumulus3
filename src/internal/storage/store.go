@@ -39,3 +39,30 @@ func (s *Store) ReadFile(filename string) (io.ReadCloser, error) {
 	fullPath := filepath.Join(s.BaseDir, filename)
 	return os.Open(fullPath)
 }
+
+// WriteBlob appends data to a volume file and returns location info
+func (s *Store) WriteBlob(data io.Reader) (volumeID int64, offset int64, bytesWritten int64, err error) {
+	// For simplicity, we use a single volume file "volume_1.dat"
+	volumeID = 1
+	filename := "volume_1.dat"
+	fullPath := filepath.Join(s.BaseDir, filename)
+
+	f, err := os.OpenFile(fullPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	offset = stat.Size()
+
+	bytesWritten, err = io.Copy(f, data)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	return volumeID, offset, bytesWritten, nil
+}

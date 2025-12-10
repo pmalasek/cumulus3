@@ -7,85 +7,146 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-type FileMetadata struct {
-	ID           string    `json:"id"`
-	Hash         string    `json:"hash"`
-	OriginalName string    `json:"original_name"`
-	Size         int64     `json:"size"`
-	ContentType  string    `json:"content_type"`
-	CreatedAt    time.Time `json:"created_at"`
+type File struct {
+	ID           string     `json:"id"`
+	Name         string     `json:"name"`
+	BlobHash     string     `json:"blob_hash"`
+	OldCumulusID *int64     `json:"old_cumulus_id,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+}
+
+type Blob struct {
+	Hash           string `json:"hash"`
+	VolumeID       int64  `json:"volume_id"`
+	Offset         int64  `json:"offset"`
+	SizeRaw        int64  `json:"size_raw"`
+	SizeCompressed int64  `json:"size_compressed"`
+	CompressionAlg string `json:"compression_alg"`
+	FileTypeID     int64  `json:"file_type_id"`
+}
+
+type FileType struct {
+	ID       int64  `json:"id"`
+	MimeType string `json:"mime_type"`
+	Category string `json:"category"`
+	Subtype  string `json:"subtype"`
 }
 
 type MetadataSQL struct {
 	db *sql.DB
 }
 
-// NewDatabaseSQL initializes SQLite connection
-func NewDatabaseSQL(dsn string) (*MetadataSQL, error) {
-	// 1. Open DB
-	// DSN example: "file:metadata.db?_journal_mode=WAL&_busy_timeout=5000&_sync=NORMAL"
+// NewMetadataSQL initializes SQLite connection
+func NewMetadataSQL(dsn string) (*MetadataSQL, error) {
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Performance settings
-	// Avoid "database is locked" errors
 	db.SetMaxOpenConns(1)
 
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}
 
-	// 3. Init Schema
-	query := `
-	CREATE TABLE IF NOT EXISTS files (
-		id TEXT PRIMARY KEY,
-		hash TEXT,
-		filename TEXT,
-		size INTEGER,
-		mime_type TEXT,
-		created_at DATETIME
-	);
-	CREATE INDEX IF NOT EXISTS idx_files_hash ON files(hash);
-	CREATE INDEX IF NOT EXISTS idx_files_mime ON files(mime_type);
-	`
-	if _, err := db.Exec(query); err != nil {
+	if err := initSchema(db); err != nil {
 		return nil, err
 	}
 
 	return &MetadataSQL{db: db}, nil
 }
 
+func initSchema(db *sql.DB) error {
+	queries := []string{
+		`CREATE TABLE IF NOT EXISTS file_types (
+			id INTEGER PRIMARY KEY,
+			mime_type TEXT UNIQUE,
+			category TEXT,
+			subtype TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS blobs (
+			hash TEXT PRIMARY KEY,
+			volume_id INTEGER,
+			offset INTEGER,
+			size_raw INTEGER,
+			size_compressed INTEGER,
+			compression_alg TEXT,
+			file_type_id INTEGER,
+			FOREIGN KEY(file_type_id) REFERENCES file_types(id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS files (
+			id TEXT PRIMARY KEY,
+			name TEXT,
+			blob_hash TEXT,
+			old_cumulus_id INTEGER,
+			expires_at DATETIME,
+			created_at DATETIME,
+			FOREIGN KEY(blob_hash) REFERENCES blobs(hash)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_files_expires_at ON files(expires_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_files_old_cumulus_id ON files(old_cumulus_id);`,
+	}
+
+	for _, query := range queries {
+		if _, err := db.Exec(query); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *MetadataSQL) Close() error {
 	return m.db.Close()
 }
 
-// Save inserts a new file record
-func (m *MetadataSQL) Save(meta FileMetadata) error {
+func (m *MetadataSQL) SaveFile(file File) error {
 	query := `
-	INSERT INTO files (id, hash, filename, size, mime_type, created_at)
+	INSERT INTO files (id, name, blob_hash, old_cumulus_id, expires_at, created_at)
 	VALUES (?, ?, ?, ?, ?, ?)
 	`
-	_, err := m.db.Exec(query, meta.ID, meta.Hash, meta.OriginalName, meta.Size, meta.ContentType, meta.CreatedAt)
+	_, err := m.db.Exec(query, file.ID, file.Name, file.BlobHash, file.OldCumulusID, file.ExpiresAt, file.CreatedAt)
 	return err
 }
 
-// FindByHash retrieves file metadata by hash
-func (m *MetadataSQL) FindByHash(hash string) (*FileMetadata, error) {
-	query := `
-	SELECT id, hash, filename, size, mime_type, created_at
-	FROM files WHERE hash = ? LIMIT 1
-	`
-	row := m.db.QueryRow(query, hash)
-
-	var meta FileMetadata
-	err := row.Scan(&meta.ID, &meta.Hash, &meta.OriginalName, &meta.Size, &meta.ContentType, &meta.CreatedAt)
+func (m *MetadataSQL) CleanupExpiredFiles() (int64, error) {
+	query := `DELETE FROM files WHERE expires_at < CURRENT_TIMESTAMP`
+	res, err := m.db.Exec(query)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
+		return 0, err
 	}
-	return &meta, nil
+	return res.RowsAffected()
+}
+
+func (m *MetadataSQL) BlobExists(hash string) (bool, error) {
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM blobs WHERE hash = ?)`
+	err := m.db.QueryRow(query, hash).Scan(&exists)
+	return exists, err
+}
+
+func (m *MetadataSQL) SaveBlob(blob Blob) error {
+	query := `
+	INSERT INTO blobs (hash, volume_id, offset, size_raw, size_compressed, compression_alg, file_type_id)
+	VALUES (?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err := m.db.Exec(query, blob.Hash, blob.VolumeID, blob.Offset, blob.SizeRaw, blob.SizeCompressed, blob.CompressionAlg, blob.FileTypeID)
+	return err
+}
+
+func (m *MetadataSQL) GetOrCreateFileType(mimeType, category, subtype string) (int64, error) {
+	var id int64
+	err := m.db.QueryRow("SELECT id FROM file_types WHERE mime_type = ?", mimeType).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+
+	res, err := m.db.Exec("INSERT INTO file_types (mime_type, category, subtype) VALUES (?, ?, ?)", mimeType, category, subtype)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
 }

@@ -1,20 +1,23 @@
 package api
 
 import (
-	"crypto/sha256"
+	"compress/gzip"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/pmalasek/cumulus3/docs"
-	httpSwagger "github.com/swaggo/http-swagger"
-
-	// Ujisti se, že cesta odpovídá tvému go.mod
 	"github.com/pmalasek/cumulus3/src/internal/storage"
+	httpSwagger "github.com/swaggo/http-swagger"
+	"golang.org/x/crypto/blake2b"
 )
 
 type Server struct {
@@ -22,8 +25,6 @@ type Server struct {
 	MetaStore     *storage.MetadataSQL
 	MaxUploadSize int64
 }
-
-// -----------------------------
 
 // Routes vytvoří router a zaregistruje cesty
 func (s *Server) Routes() http.Handler {
@@ -41,29 +42,25 @@ func (s *Server) Routes() http.Handler {
 // @Accept multipart/form-data
 // @Produce json
 // @Param file formData file true "File to upload"
-// @Param tags formData string false "Comma-separated tags"
+// @Param old_cumulus_id formData int false "Legacy ID"
+// @Param validity formData string false "Validity period (e.g. '1 day', '2 months')"
 // @Success 201 {string} string "File uploaded successfully"
 // @Failure 400 {string} string "Bad Request"
 // @Failure 413 {string} string "File too large"
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /api/v1/files [post]
 func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
-	// 1. Omezení velikosti requestu (Hard limit)
-	// Toto zajistí, že pokud klient pošle více dat než MaxUploadSize, spojení se ukončí/vrátí chybu.
-	r.Body = http.MaxBytesReader(w, r.Body, s.MaxUploadSize)
-
-	// ParseMultipartForm načte data. Parametr zde určuje, kolik se toho vejde do RAM.
-	// Pokud je limit MaxBytesReader stejný jako zde, vše se bude držet v RAM (nebo se to rovnou zamítne).
-	if err := r.ParseMultipartForm(s.MaxUploadSize); err != nil {
-		if err.Error() == "http: request body too large" {
-			http.Error(w, "File too large", http.StatusRequestEntityTooLarge)
-		} else {
-			http.Error(w, "Could not parse multipart form", http.StatusBadRequest)
-		}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 2. Get file from form
+	r.Body = http.MaxBytesReader(w, r.Body, s.MaxUploadSize)
+	if err := r.ParseMultipartForm(s.MaxUploadSize); err != nil {
+		http.Error(w, "File too large or invalid form", http.StatusBadRequest)
+		return
+	}
+
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "Error retrieving file", http.StatusBadRequest)
@@ -71,65 +68,162 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// 3. Prepare metadata
-	filename := header.Filename
-	contentType := header.Header.Get("Content-Type")
-	size := header.Size
-
-	// Parse tags (assuming comma separated)
-	var tags []string
-	tagsStr := r.FormValue("tags")
-	if tagsStr != "" {
-		for t := range strings.SplitSeq(tagsStr, ",") {
-			tags = append(tags, strings.TrimSpace(t))
+	// Process optional fields
+	var oldCumulusID *int64
+	if val := r.FormValue("old_cumulus_id"); val != "" {
+		id, err := strconv.ParseInt(val, 10, 64)
+		if err == nil {
+			oldCumulusID = &id
 		}
 	}
-	fmt.Println("Tags", tags)
 
-	// Calculate Hash while writing to disk
-	hasher := sha256.New()
-	tee := io.TeeReader(file, hasher)
+	var expiresAt *time.Time
+	if val := r.FormValue("validity"); val != "" {
+		exp, err := parseValidity(val)
+		if err != nil {
+			http.Error(w, "Invalid validity format: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		expiresAt = &exp
+	}
 
-	// 4. Save file to disk
-	if err := s.Store.WriteFile(filename, tee); err != nil {
-		http.Error(w, "Error saving file to disk", http.StatusInternalServerError)
+	// Pipeline: Stream -> Hasher + GZIP
+	hasher, _ := blake2b.New256(nil)
+
+	// Use a temporary file for the compressed output
+	tempFile, err := os.CreateTemp("", "upload-*")
+	if err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	defer os.Remove(tempFile.Name()) // Clean up
+	defer tempFile.Close()
+
+	gzipW := gzip.NewWriter(tempFile)
+	multiW := io.MultiWriter(hasher, gzipW)
+
+	sizeRaw, err := io.Copy(multiW, file)
+	if err != nil {
+		http.Error(w, "Error processing file", http.StatusInternalServerError)
+		return
+	}
+	gzipW.Close() // Flush gzip
+	tempFile.Sync()
+
+	hash := hex.EncodeToString(hasher.Sum(nil))
+
+	// Check deduplication
+	exists, err := s.MetaStore.BlobExists(hash)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
-	hash := hex.EncodeToString(hasher.Sum(nil))
-	id := uuid.New().String()
+	if !exists {
+		// Write to Volume
+		// Rewind temp file
+		tempFile.Seek(0, 0)
 
-	// 5. Save metadata to DB
-	meta := storage.FileMetadata{
-		ID:           id,
-		Hash:         hash,
-		OriginalName: filename,
-		Size:         size,
-		ContentType:  contentType,
+		// Get compressed size
+		stat, _ := tempFile.Stat()
+		sizeCompressed := stat.Size()
+
+		volID, offset, _, err := s.Store.WriteBlob(tempFile)
+		if err != nil {
+			http.Error(w, "Storage error", http.StatusInternalServerError)
+			return
+		}
+
+		// Determine File Type
+		mimeType := header.Header.Get("Content-Type")
+		if mimeType == "" {
+			mimeType = mime.TypeByExtension(filepath.Ext(header.Filename))
+			if mimeType == "" {
+				mimeType = "application/octet-stream"
+			}
+		}
+		// Simple category/subtype parsing
+		category := "unknown"
+		subtype := "unknown"
+		if parts := strings.Split(mimeType, "/"); len(parts) == 2 {
+			category = parts[0]
+			subtype = parts[1]
+		}
+
+		fileTypeID, err := s.MetaStore.GetOrCreateFileType(mimeType, category, subtype)
+		if err != nil {
+			http.Error(w, "Metadata error", http.StatusInternalServerError)
+			return
+		}
+
+		// Save Blob
+		blob := storage.Blob{
+			Hash:           hash,
+			VolumeID:       volID,
+			Offset:         offset,
+			SizeRaw:        sizeRaw,
+			SizeCompressed: sizeCompressed,
+			CompressionAlg: "gzip",
+			FileTypeID:     fileTypeID,
+		}
+		if err := s.MetaStore.SaveBlob(blob); err != nil {
+			http.Error(w, "Metadata error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Save File
+	fileID := uuid.New().String()
+	fileMeta := storage.File{
+		ID:           fileID,
+		Name:         header.Filename,
+		BlobHash:     hash,
+		OldCumulusID: oldCumulusID,
+		ExpiresAt:    expiresAt,
 		CreatedAt:    time.Now(),
 	}
 
-	if err := s.MetaStore.Save(meta); err != nil {
-		http.Error(w, "Error saving metadata", http.StatusInternalServerError)
+	if err := s.MetaStore.SaveFile(fileMeta); err != nil {
+		http.Error(w, "Metadata error", http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, "File %s uploaded successfully", filename)
+	fmt.Fprintf(w, "File uploaded successfully. ID: %s", fileID)
 }
 
-// HandleDownload downloads a file
-// @Summary Download a file
-// @Description Downloads a file by its filename
-// @Tags files
-// @Produce octet-stream
-// @Param filename path string true "Filename"
-// @Success 200 {file} file "File content"
-// @Failure 404 {string} string "Not Found"
-// @Router /api/v1/files/{filename} [get]
 func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
-	// ... tvůj kód ...
-	fmt.Println("response", w.Header())
-	fmt.Println("response", r.Header)
+	// Placeholder
+	w.WriteHeader(http.StatusNotImplemented)
+}
 
+func parseValidity(val string) (time.Time, error) {
+	parts := strings.Fields(val)
+	if len(parts) != 2 {
+		return time.Time{}, fmt.Errorf("invalid format")
+	}
+	amount, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid amount")
+	}
+	unit := strings.ToLower(parts[1])
+
+	var d time.Duration
+	switch {
+	case strings.HasPrefix(unit, "day"):
+		d = time.Duration(amount) * 24 * time.Hour
+	case strings.HasPrefix(unit, "month"):
+		d = time.Duration(amount) * 30 * 24 * time.Hour // Approx
+	default:
+		return time.Time{}, fmt.Errorf("unknown unit")
+	}
+
+	if d < 24*time.Hour {
+		return time.Time{}, fmt.Errorf("minimum validity is 1 day")
+	}
+	if d > 365*24*time.Hour {
+		return time.Time{}, fmt.Errorf("maximum validity is 1 year")
+	}
+
+	return time.Now().Add(d), nil
 }

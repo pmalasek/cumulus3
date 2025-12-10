@@ -35,7 +35,7 @@ func main() {
 
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
-		dbPath = "./data/metadata/cumulus3.db"
+		dbPath = "./data/database/cumulus3.db"
 	}
 
 	dataFileSizeStr := os.Getenv("DATA_FILE_SIZE")
@@ -63,7 +63,7 @@ func main() {
 
 	// 2. Start Metadata DB (SQLite)
 	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_sync=NORMAL", dbPath)
-	metaStore, err := storage.NewDatabaseSQL(dsn)
+	metaStore, err := storage.NewMetadataSQL(dsn)
 	if err != nil {
 		panic("Nelze otevřít DB: " + err.Error())
 	}

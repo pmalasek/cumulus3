@@ -46,9 +46,15 @@ const docTemplate = `{
                         "required": true
                     },
                     {
+                        "type": "integer",
+                        "description": "Legacy ID",
+                        "name": "old_cumulus_id",
+                        "in": "formData"
+                    },
+                    {
                         "type": "string",
-                        "description": "Comma-separated tags",
-                        "name": "tags",
+                        "description": "Validity period (e.g. '1 day', '2 months')",
+                        "name": "validity",
                         "in": "formData"
                     }
                 ],
@@ -73,41 +79,6 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/files/{filename}": {
-            "get": {
-                "description": "Downloads a file by its filename",
-                "produces": [
-                    "application/octet-stream"
-                ],
-                "tags": [
-                    "files"
-                ],
-                "summary": "Download a file",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Filename",
-                        "name": "filename",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "File content",
-                        "schema": {
-                            "type": "file"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
                         "schema": {
                             "type": "string"
                         }

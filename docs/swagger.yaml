@@ -24,9 +24,13 @@ paths:
         name: file
         required: true
         type: file
-      - description: Comma-separated tags
+      - description: Legacy ID
         in: formData
-        name: tags
+        name: old_cumulus_id
+        type: integer
+      - description: Validity period (e.g. '1 day', '2 months')
+        in: formData
+        name: validity
         type: string
       produces:
       - application/json
@@ -48,29 +52,6 @@ paths:
           schema:
             type: string
       summary: Upload a file
-      tags:
-      - files
-  /api/v1/files/{filename}:
-    get:
-      description: Downloads a file by its filename
-      parameters:
-      - description: Filename
-        in: path
-        name: filename
-        required: true
-        type: string
-      produces:
-      - application/octet-stream
-      responses:
-        "200":
-          description: File content
-          schema:
-            type: file
-        "404":
-          description: Not Found
-          schema:
-            type: string
-      summary: Download a file
       tags:
       - files
 swagger: "2.0"
