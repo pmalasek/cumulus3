@@ -33,3 +33,12 @@ Poté je potřeba přidat cestu na binárky Go do PATH
 ```BASH
 export PATH=$PATH:$(go env GOPATH)/bin to .bashrc
 ```
+
+## kompilace všeho
+
+```bash
+mkdir -p build && \
+go build -o build/migrate_cumulus ./src/cmd/migrate_cumulus && \
+go build -o build/recovery-tool ./src/cmd/recovery-tool && \
+go build -o build/volume-server ./src/cmd/volume-server
+```

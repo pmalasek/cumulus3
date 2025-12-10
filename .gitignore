@@ -30,3 +30,4 @@ go.work
 tmp/
 data/
 metadata.db
+build/
