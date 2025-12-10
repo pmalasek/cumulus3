@@ -34,16 +34,26 @@ func main() {
 
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
-		dbPath = "./data/metadata/metadata.db"
+		dbPath = "./data/metadata/cumulus3.db"
 	}
 
 	dataFileSizeStr := os.Getenv("DATA_FILE_SIZE")
-	var maxUploadSize int64 = 10 << 20 // Default 10MB
+	var maxDataFileSize int64 = 10 << 20 // Default 10MB for data file
 	if dataFileSizeStr != "" {
 		if s, err := utils.ParseBytes(dataFileSizeStr); err == nil {
-			maxUploadSize = s
+			maxDataFileSize = s
 		} else {
 			log.Printf("Invalid DATA_FILE_SIZE format: %v, using default", err)
+		}
+	}
+
+	maxUploadFileSizeStr := os.Getenv("MAX_UPLOAD_FILE_SIZE")
+	var maxUploadSize int64 = 50 << 20 // Default 50MB for upload
+	if maxUploadFileSizeStr != "" {
+		if s, err := utils.ParseBytes(maxUploadFileSizeStr); err == nil {
+			maxUploadSize = s
+		} else {
+			log.Printf("Invalid MAX_UPLOAD_FILE_SIZE format: %v, using default", err)
 		}
 	}
 
@@ -60,7 +70,7 @@ func main() {
 	defer metaStore.Close()
 
 	// 3. Inicializace File Storage (zatím to naše jednoduché)
-	fileStore := storage.NewStore("./data")
+	fileStore := storage.NewStore("./data", maxDataFileSize)
 
 	// 4. Inicializace API serveru (teď už mu budeme posílat i metaStore!)
 	// Pozor: Zde musíme upravit strukturu Server v api/handlers.go (viz další krok)
@@ -72,6 +82,6 @@ func main() {
 
 	handler := srv.Routes()
 
-	fmt.Println("🚀 Běžíme na :", os.Getenv("SERVER_PORT"))
-	http.ListenAndServe(":"+os.Getenv("SERVER_PORT"), handler)
+	fmt.Println("🚀 Běžíme na " + os.Getenv("SERVER_ADDRESS") + ":" + os.Getenv("SERVER_PORT"))
+	http.ListenAndServe(os.Getenv("SERVER_ADDRESS")+":"+os.Getenv("SERVER_PORT"), handler)
 }

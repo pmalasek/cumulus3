@@ -8,13 +8,17 @@ import (
 
 // Store reprezentuje naše úložiště
 type Store struct {
-	BaseDir string
+	BaseDir         string
+	MaxDataFileSize int64
 }
 
 // NewStore vytvoří novou instanci a připraví složku
-func NewStore(dir string) *Store {
+func NewStore(dir string, maxDataFileSize int64) *Store {
 	_ = os.MkdirAll(dir, 0755)
-	return &Store{BaseDir: dir}
+	return &Store{
+		BaseDir:         dir,
+		MaxDataFileSize: maxDataFileSize,
+	}
 }
 
 // WriteFile uloží data na disk (zatím jednoduše)
