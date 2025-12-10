@@ -11,6 +11,7 @@ import (
 
 	_ "github.com/pmalasek/cumulus3/docs"
 	"github.com/pmalasek/cumulus3/src/internal/service"
+	"github.com/pmalasek/cumulus3/src/internal/utils"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
@@ -35,6 +36,7 @@ func (s *Server) Routes() http.Handler {
 // @Accept multipart/form-data
 // @Produce json
 // @Param file formData file true "File to upload"
+// @Param tags formData string false "Tags like array of string or coma separated strings"
 // @Param old_cumulus_id formData int false "Legacy ID"
 // @Param validity formData string false "Validity period (e.g. '1 day', '2 months')"
 // @Success 201 {object} map[string]string "File uploaded successfully"
@@ -72,7 +74,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	var expiresAt *time.Time
 	if val := r.FormValue("validity"); val != "" {
-		exp, err := parseValidity(val)
+		exp, err := utils.ParseValidity(val)
 		if err != nil {
 			http.Error(w, "Invalid validity format: "+err.Error(), http.StatusBadRequest)
 			return
@@ -80,10 +82,25 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		expiresAt = &exp
 	}
 
+	// Process tags
+	var tags []string
+	if values, ok := r.Form["tags"]; ok {
+		for _, v := range values {
+			parts := strings.Split(v, ",")
+			for _, part := range parts {
+				trimmed := strings.TrimSpace(part)
+				if trimmed != "" {
+					tags = append(tags, trimmed)
+				}
+			}
+		}
+	}
+	tagsStr := strings.Join(tags, ",")
+
 	cleanFilename := filepath.Base(header.Filename)
-	fmt.Printf("DATA : %s %v %v\n", cleanFilename, oldCumulusID, expiresAt)
+	fmt.Printf("DATA : %s %v %v %s\n", cleanFilename, oldCumulusID, expiresAt, tagsStr)
 	// Call FileService
-	fileID, err := s.FileService.UploadFile(file, cleanFilename, header.Header.Get("Content-Type"), oldCumulusID, expiresAt, "")
+	fileID, err := s.FileService.UploadFile(file, cleanFilename, header.Header.Get("Content-Type"), oldCumulusID, expiresAt, tagsStr)
 	if err != nil {
 		// We should probably log the error and return 500
 		// For now, just return 500
@@ -101,33 +118,6 @@ func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-func parseValidity(val string) (time.Time, error) {
-	parts := strings.Fields(val)
-	if len(parts) != 2 {
-		return time.Time{}, fmt.Errorf("invalid format")
-	}
-	amount, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return time.Time{}, fmt.Errorf("invalid amount")
-	}
-	unit := strings.ToLower(parts[1])
-
-	var d time.Duration
-	switch {
-	case strings.HasPrefix(unit, "day"):
-		d = time.Duration(amount) * 24 * time.Hour
-	case strings.HasPrefix(unit, "month"):
-		d = time.Duration(amount) * 30 * 24 * time.Hour // Approx
-	default:
-		return time.Time{}, fmt.Errorf("unknown unit")
-	}
-
-	if d < 24*time.Hour {
-		return time.Time{}, fmt.Errorf("minimum validity is 1 day")
-	}
-	if d > 365*24*time.Hour {
-		return time.Time{}, fmt.Errorf("maximum validity is 1 year")
-	}
-
-	return time.Now().Add(d), nil
-}
+// {
+//   "fileID": "f73c3c10-f516-4a6b-9f5c-daae1b42e710"
+// }

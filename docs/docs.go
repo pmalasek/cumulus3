@@ -46,6 +46,12 @@ const docTemplate = `{
                         "required": true
                     },
                     {
+                        "type": "string",
+                        "description": "Tags like array of string or coma separated strings",
+                        "name": "tags",
+                        "in": "formData"
+                    },
+                    {
                         "type": "integer",
                         "description": "Legacy ID",
                         "name": "old_cumulus_id",
@@ -62,7 +68,10 @@ const docTemplate = `{
                     "201": {
                         "description": "File uploaded successfully",
                         "schema": {
-                            "type": "string"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "400": {

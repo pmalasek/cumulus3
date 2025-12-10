@@ -24,6 +24,10 @@ paths:
         name: file
         required: true
         type: file
+      - description: Tags like array of string or coma separated strings
+        in: formData
+        name: tags
+        type: string
       - description: Legacy ID
         in: formData
         name: old_cumulus_id
@@ -38,7 +42,9 @@ paths:
         "201":
           description: File uploaded successfully
           schema:
-            type: string
+            additionalProperties:
+              type: string
+            type: object
         "400":
           description: Bad Request
           schema:
