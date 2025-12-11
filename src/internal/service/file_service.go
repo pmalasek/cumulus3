@@ -396,6 +396,16 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 	// 2. Create new blob record to get ID
 	blobID, err = s.MetaStore.CreateBlob(hash)
 	if err != nil {
+		// Handle race condition: another process might have created the blob
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			var exists bool
+			var lookupErr error
+			blobID, exists, lookupErr = s.MetaStore.GetBlobIDByHash(hash)
+			if lookupErr == nil && exists {
+				// Successfully recovered from race condition
+				return blobID, true, nil
+			}
+		}
 		return 0, false, fmt.Errorf("database error creating blob: %w", err)
 	}
 
