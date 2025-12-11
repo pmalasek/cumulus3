@@ -29,13 +29,17 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.HandleHealth)
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/v2/files/upload", s.HandleUpload)
-	mux.HandleFunc("/v2/files/", s.HandleDownload)
-	mux.HandleFunc("/v2/files/info/", s.HandleFileInfo)
-	mux.HandleFunc("/v2/images/", s.HandleImage)
+
 	mux.HandleFunc("/base/files/id/", s.HandleDownloadByOldID)
 	mux.HandleFunc("/base/files/info/", s.HandleFileInfoByOldID)
 	mux.HandleFunc("/base/files/delete/", s.HandleDelete)
+
+	mux.HandleFunc("/v2/files/upload", s.HandleUpload)
+	mux.HandleFunc("/v2/files/", s.HandleDownload)
+	mux.HandleFunc("/v2/files/info/", s.HandleFileInfo)
+
+	mux.HandleFunc("/v2/images/", s.HandleImage)
+
 	mux.HandleFunc("/docs/", httpSwagger.WrapHandler)
 	return mux
 }
@@ -447,7 +451,7 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 	// Parse URL: /v2/images/{uuid} nebo /v2/images/{uuid}/{variant}
 	path := strings.TrimPrefix(r.URL.Path, "/v2/images/")
 	parts := strings.Split(path, "/")
-	
+
 	if len(parts) < 1 || parts[0] == "" {
 		utils.Info("IMAGE", " Missing UUID from %s", r.RemoteAddr)
 		http.Error(w, "Missing file UUID", http.StatusBadRequest)
@@ -512,7 +516,7 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 			// Pokud není specifikována varianta, použijeme thumb jako default pro PDF
 			size = &images.SizeThumb
 		}
-		
+
 		utils.Info("IMAGE", " Generating PDF thumbnail: uuid=%s, variant=%s, size=%dx%d", uuid, variant, size.Width, size.Height)
 		thumbnail, err := images.GeneratePDFThumbnail(data, *size)
 		if err != nil {
@@ -520,7 +524,7 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to generate PDF thumbnail: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		
+
 		data = thumbnail
 		mimeType = "image/jpeg"
 		utils.Info("IMAGE", " SUCCESS PDF thumbnail: uuid=%s, variant=%s, size=%d, remote=%s", uuid, variant, len(data), r.RemoteAddr)
@@ -533,7 +537,7 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to resize image: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		
+
 		data = resized
 		mimeType = images.GetOutputMimeType(mimeType)
 		utils.Info("IMAGE", " SUCCESS resized: uuid=%s, variant=%s, size=%d, remote=%s", uuid, variant, len(data), r.RemoteAddr)
