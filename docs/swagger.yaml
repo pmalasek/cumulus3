@@ -71,7 +71,7 @@ paths:
             type: string
       summary: Delete a file
       tags:
-      - files
+      - 01 - Base (internal)
   /base/files/id/{id}:
     get:
       description: Downloads a file by its old Cumulus ID
@@ -98,7 +98,7 @@ paths:
             type: string
       summary: Download a file by old ID
       tags:
-      - files
+      - 01 - Base (internal)
   /base/files/info/{id}:
     get:
       description: Get detailed information about a file by its old Cumulus ID
@@ -133,7 +133,7 @@ paths:
             type: string
       summary: Get file info by old ID
       tags:
-      - files
+      - 01 - Base (internal)
   /health:
     get:
       description: Returns OK if service is healthy
@@ -148,12 +148,12 @@ paths:
             type: object
       summary: Health check
       tags:
-      - system
+      - 04 - System
   /v2/files/{id}:
     get:
-      description: Downloads a file by its ID
+      description: Downloads a file by its GUID
       parameters:
-      - description: File ID
+      - description: File GUID
         in: path
         name: id
         required: true
@@ -175,7 +175,7 @@ paths:
             type: string
       summary: Download a file
       tags:
-      - files
+      - 02 - Files
   /v2/files/info/{id}:
     get:
       description: Get detailed information about a file
@@ -210,7 +210,7 @@ paths:
             type: string
       summary: Get file info
       tags:
-      - files
+      - 02 - Files
   /v2/files/upload:
     post:
       consumes:
@@ -257,5 +257,14 @@ paths:
             type: string
       summary: Upload a file
       tags:
-      - files
+      - 02 - Files
 swagger: "2.0"
+tags:
+- description: Internal endpoints for backward compatibility with old Cumulus ID system
+  name: 01 - Base (internal)
+- description: Main file operations - upload, download, metadata, delete
+  name: 02 - Files
+- description: Image processing endpoints - thumbnails, previews, transformations
+  name: 03 - Images
+- description: System endpoints - health checks, metrics
+  name: 04 - System

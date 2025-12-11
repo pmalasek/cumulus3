@@ -23,7 +23,7 @@ const docTemplate = `{
             "delete": {
                 "description": "Deletes a file by its ID",
                 "tags": [
-                    "files"
+                    "01 - Base (internal)"
                 ],
                 "summary": "Delete a file",
                 "parameters": [
@@ -64,7 +64,7 @@ const docTemplate = `{
                     "application/octet-stream"
                 ],
                 "tags": [
-                    "files"
+                    "01 - Base (internal)"
                 ],
                 "summary": "Download a file by old ID",
                 "parameters": [
@@ -105,7 +105,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "files"
+                    "01 - Base (internal)"
                 ],
                 "summary": "Get file info by old ID",
                 "parameters": [
@@ -158,7 +158,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "system"
+                    "04 - System"
                 ],
                 "summary": "Health check",
                 "responses": {
@@ -181,7 +181,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "files"
+                    "02 - Files"
                 ],
                 "summary": "Get file info",
                 "parameters": [
@@ -237,7 +237,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "files"
+                    "02 - Files"
                 ],
                 "summary": "Upload a file",
                 "parameters": [
@@ -300,18 +300,18 @@ const docTemplate = `{
         },
         "/v2/files/{id}": {
             "get": {
-                "description": "Downloads a file by its ID",
+                "description": "Downloads a file by its GUID",
                 "produces": [
                     "application/octet-stream"
                 ],
                 "tags": [
-                    "files"
+                    "02 - Files"
                 ],
                 "summary": "Download a file",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "File ID",
+                        "description": "File GUID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -395,7 +395,25 @@ const docTemplate = `{
                 }
             }
         }
-    }
+    },
+    "tags": [
+        {
+            "description": "Internal endpoints for backward compatibility with old Cumulus ID system",
+            "name": "01 - Base (internal)"
+        },
+        {
+            "description": "Main file operations - upload, download, metadata, delete",
+            "name": "02 - Files"
+        },
+        {
+            "description": "Image processing endpoints - thumbnails, previews, transformations",
+            "name": "03 - Images"
+        },
+        {
+            "description": "System endpoints - health checks, metrics",
+            "name": "04 - System"
+        }
+    ]
 }`
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it

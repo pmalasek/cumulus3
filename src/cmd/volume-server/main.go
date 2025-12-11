@@ -25,6 +25,18 @@ import (
 // @license.name Apache 2.0
 // @license.url http://www.apache.org/licenses/LICENSE-2.0.html
 
+// @tag.name 01 - Base (internal)
+// @tag.description Internal endpoints for backward compatibility with old Cumulus ID system
+
+// @tag.name 02 - Files
+// @tag.description Main file operations - upload, download, metadata, delete
+
+// @tag.name 03 - Images
+// @tag.description Image processing endpoints - thumbnails, previews, transformations
+
+// @tag.name 04 - System
+// @tag.description System endpoints - health checks, metrics
+
 // @BasePath /
 func main() {
 	// Load .env file

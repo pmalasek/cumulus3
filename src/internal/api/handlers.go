@@ -38,26 +38,10 @@ func (s *Server) Routes() http.Handler {
 	return mux
 }
 
-// HandleHealth returns service health status
-// @Summary Health check
-// @Description Returns OK if service is healthy
-// @Tags system
-// @Produce json
-// @Success 200 {object} map[string]string
-// @Router /health [get]
-func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "ok",
-		"service": "cumulus3",
-	})
-}
-
 // HandleUpload uploads a file and saves metadata
 // @Summary Upload a file
 // @Description Uploads a file to the storage
-// @Tags files
+// @Tags 02 - Files
 // @Accept multipart/form-data
 // @Produce json
 // @Param file formData file true "File to upload"
@@ -160,10 +144,10 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 // HandleDownload downloads a file
 // @Summary Download a file
-// @Description Downloads a file by its ID
-// @Tags files
+// @Description Downloads a file by its GUID
+// @Tags 02 - Files
 // @Produce octet-stream
-// @Param id path string true "File ID"
+// @Param id path string true "File GUID"
 // @Success 200 {file} file "File content"
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
@@ -218,7 +202,7 @@ func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 // HandleFileInfo retrieves file information
 // @Summary Get file info
 // @Description Get detailed information about a file
-// @Tags files
+// @Tags 02 - Files
 // @Produce json
 // @Param id path string true "File ID"
 // @Param extended query boolean false "Include base64 content"
@@ -271,7 +255,7 @@ func (s *Server) HandleFileInfo(w http.ResponseWriter, r *http.Request) {
 // HandleDownloadByOldID downloads a file by its old Cumulus ID
 // @Summary Download a file by old ID
 // @Description Downloads a file by its old Cumulus ID
-// @Tags files
+// @Tags 01 - Base (internal)
 // @Produce octet-stream
 // @Param id path int true "Old Cumulus ID"
 // @Success 200 {file} file "File content"
@@ -332,7 +316,7 @@ func (s *Server) HandleDownloadByOldID(w http.ResponseWriter, r *http.Request) {
 // HandleFileInfoByOldID retrieves file information by old Cumulus ID
 // @Summary Get file info by old ID
 // @Description Get detailed information about a file by its old Cumulus ID
-// @Tags files
+// @Tags 01 - Base (internal)
 // @Produce json
 // @Param id path int true "Old Cumulus ID"
 // @Param extended query boolean false "Include base64 content"
@@ -387,7 +371,7 @@ func (s *Server) HandleFileInfoByOldID(w http.ResponseWriter, r *http.Request) {
 // HandleDelete deletes a file
 // @Summary Delete a file
 // @Description Deletes a file by its ID
-// @Tags files
+// @Tags 01 - Base (internal)
 // @Param id path string true "File ID"
 // @Success 200 {string} string "File deleted successfully"
 // @Failure 400 {string} string "Bad Request"
@@ -417,4 +401,20 @@ func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	utils.Info("DELETE", " SUCCESS: file_id=%s, remote=%s", id, r.RemoteAddr)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("File deleted successfully"))
+}
+
+// HandleHealth returns service health status
+// @Summary Health check
+// @Description Returns OK if service is healthy
+// @Tags 04 - System
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /health [get]
+func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"service": "cumulus3",
+	})
 }
