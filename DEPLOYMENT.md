@@ -43,7 +43,7 @@ docker-compose down
 
 ## Struktura dat
 
-```
+```bash
 /app/data/
 ├── database/
 │   └── cumulus3.db          # SQLite databáze
@@ -58,10 +58,10 @@ docker-compose down
 
 ### Přístup k rozhraním
 
-- **Cumulus3 API**: http://localhost:8080
-- **Swagger dokumentace**: http://localhost:8080/swagger/index.html
-- **Prometheus**: http://localhost:9090
-- **Grafana**: http://localhost:3000
+- **Cumulus3 API**: <http://localhost:8080>
+- **Swagger dokumentace**: <http://localhost:8080/swagger/index.html>
+- **Prometheus**: <http://localhost:9090>
+- **Grafana**: <http://localhost:3000>
 
 ### Grafana přihlášení
 
@@ -98,22 +98,24 @@ docker-compose restart cumulus3
 ### Doporučené praktiky
 
 1. **Změňte výchozí hesla**:
+
    ```bash
    export GF_ADMIN_PASSWORD="silne-heslo"
    ```
 
-2. **Používejte HTTPS v production**:
+3. **Používejte HTTPS v production**:
    - Nakonfigurujte Nginx s SSL certifikáty
    - Umístěte certifikáty do `./ssl/` adresáře
 
-3. **Nastavte firewall**:
+4. **Nastavte firewall**:
+
    ```bash
    sudo ufw allow 80/tcp
    sudo ufw allow 443/tcp
    sudo ufw enable
    ```
 
-4. **Omezení zdrojů**:
+5. **Omezení zdrojů**:
    - V production compose jsou nastaveny CPU a memory limity
    - Upravte dle HW možností serveru
 
