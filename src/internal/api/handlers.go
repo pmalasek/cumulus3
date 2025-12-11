@@ -509,14 +509,19 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pro PDF jsou podporovány všechny varianty
-	if isPDF {
-		// Pro PDF musíme vygenerovat náhled
-		if size == nil {
-			// Pokud není specifikována varianta, použijeme thumb jako default pro PDF
-			size = &images.SizeThumb
-		}
+	// Pokud není specifikována varianta, vrátíme originální soubor
+	if size == nil {
+		utils.Info("IMAGE", " Returning original: uuid=%s, size=%d, remote=%s", uuid, len(data), r.RemoteAddr)
+		w.Header().Set("Content-Type", mimeType)
+		encodedFilename := url.PathEscape(filename)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"; filename*=UTF-8''%s", filename, encodedFilename))
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.Write(data)
+		return
+	}
 
+	// Pro PDF s variantou musíme vygenerovat náhled
+	if isPDF {
 		utils.Info("IMAGE", " Generating PDF thumbnail: uuid=%s, variant=%s, size=%dx%d", uuid, variant, size.Width, size.Height)
 		thumbnail, err := images.GeneratePDFThumbnail(data, *size)
 		if err != nil {
@@ -528,8 +533,8 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 		data = thumbnail
 		mimeType = "image/jpeg"
 		utils.Info("IMAGE", " SUCCESS PDF thumbnail: uuid=%s, variant=%s, size=%d, remote=%s", uuid, variant, len(data), r.RemoteAddr)
-	} else if size != nil {
-		// Pro obrázky provedeme resize (pokud je specifikována varianta)
+	} else {
+		// Pro obrázky provedeme resize
 		utils.Info("IMAGE", " Resizing image: uuid=%s, variant=%s, size=%dx%d", uuid, variant, size.Width, size.Height)
 		resized, err := images.ResizeImage(data, mimeType, *size)
 		if err != nil {
@@ -541,8 +546,6 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 		data = resized
 		mimeType = images.GetOutputMimeType(mimeType)
 		utils.Info("IMAGE", " SUCCESS resized: uuid=%s, variant=%s, size=%d, remote=%s", uuid, variant, len(data), r.RemoteAddr)
-	} else {
-		utils.Info("IMAGE", " Returning original: uuid=%s, size=%d, remote=%s", uuid, len(data), r.RemoteAddr)
 	}
 
 	// Nastavíme hlavičky a vrátíme obrázek
