@@ -26,6 +26,7 @@ type Server struct {
 // Routes vytvoří router a zaregistruje cesty
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/health", s.HandleHealth)
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/v2/files/upload", s.HandleUpload)
 	mux.HandleFunc("/v2/files/", s.HandleDownload)
@@ -35,6 +36,22 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/base/files/delete/", s.HandleDelete)
 	mux.HandleFunc("/docs/", httpSwagger.WrapHandler)
 	return mux
+}
+
+// HandleHealth returns service health status
+// @Summary Health check
+// @Description Returns OK if service is healthy
+// @Tags system
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /health [get]
+func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"service": "cumulus3",
+	})
 }
 
 // HandleUpload uploads a file and saves metadata

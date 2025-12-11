@@ -150,6 +150,29 @@
                 }
             }
         },
+        "/health": {
+            "get": {
+                "description": "Returns OK if service is healthy",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Health check",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/v2/files/info/{id}": {
             "get": {
                 "description": "Get detailed information about a file",

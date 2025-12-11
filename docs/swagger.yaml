@@ -137,6 +137,21 @@ paths:
       summary: Get file info by old ID
       tags:
       - files
+  /health:
+    get:
+      description: Returns OK if service is healthy
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Health check
+      tags:
+      - system
   /v2/files/{id}:
     get:
       description: Downloads a file by its ID
