@@ -83,7 +83,7 @@ func (s *Store) CompactVolume(volumeID int64, meta *MetadataSQL) error {
 		// Read blob data
 		// Calculate total size including header/footer
 		blobTotalSize := int64(HeaderSize) + sizeCompressed + int64(FooterSize)
-		
+
 		// Grow buffer if needed
 		if blobTotalSize > int64(len(buffer)) {
 			buffer = make([]byte, blobTotalSize)

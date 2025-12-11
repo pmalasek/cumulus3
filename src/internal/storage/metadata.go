@@ -107,11 +107,11 @@ ON CONFLICT(id) DO UPDATE SET size_deleted = size_deleted + ?
 }
 
 func (m *MetadataSQL) GetStorageStats() (int64, int64, error) {
-var total, deleted sql.NullInt64
-query := `SELECT SUM(size_total), SUM(size_deleted) FROM volumes`
-err := m.db.QueryRow(query).Scan(&total, &deleted)
-if err != nil {
-return 0, 0, err
-}
-return total.Int64, deleted.Int64, nil
+	var total, deleted sql.NullInt64
+	query := `SELECT SUM(size_total), SUM(size_deleted) FROM volumes`
+	err := m.db.QueryRow(query).Scan(&total, &deleted)
+	if err != nil {
+		return 0, 0, err
+	}
+	return total.Int64, deleted.Int64, nil
 }
