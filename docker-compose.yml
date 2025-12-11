@@ -48,101 +48,21 @@ services:
       start_period: 15s
     
     networks:
-      - cumulus-network
+      - cumulus3-network
     
     security_opt:
       - no-new-privileges:true
     tmpfs:
       - /tmp
 
-  # Nginx reverse proxy (pro SSL/TLS terminaci a caching)
-  nginx:
-    image: nginx:alpine
-    container_name: cumulus3-nginx
-    restart: always
-    
-    ports:
-      - "80:80"
-      - "443:443"
-    
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-      - nginx-cache:/var/cache/nginx
-    
-    depends_on:
-      cumulus3:
-        condition: service_healthy
-    
-    networks:
-      - cumulus-network
-    
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # Prometheus monitoring
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: cumulus3-prometheus
-    restart: always
-    
-    ports:
-      - "9090:9090"
-    
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-    
-    networks:
-      - cumulus-network
-    
-    depends_on:
-      - cumulus3
-
-  # Grafana visualization
-  grafana:
-    image: grafana/grafana:latest
-    container_name: cumulus3-grafana
-    restart: always
-    
-    ports:
-      - "3000:3000"
-    
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-changeme}
-      - GF_INSTALL_PLUGINS=grafana-clock-panel
-      - GF_SERVER_ROOT_URL=http://localhost:3000
-    
-    volumes:
-      - grafana-data:/var/lib/grafana
-    
-    networks:
-      - cumulus-network
-    
-    depends_on:
-      - prometheus
-
 volumes:
   cumulus3-data:
     driver: local
-  prometheus-data:
-    driver: local
-  grafana-data:
-    driver: local
-  nginx-cache:
-    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/nfs/cumulus3
+      o: bind
 
 networks:
-  cumulus-network:
+  cumulus3-network:
     driver: bridge

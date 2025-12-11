@@ -1,3 +1,6 @@
+# Příklad konfigurace pro centrální Prometheus
+# Přidejte tuto sekci do vašeho centrálního /etc/prometheus/prometheus.yml
+
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -5,6 +8,15 @@ global:
 scrape_configs:
   - job_name: 'cumulus3'
     static_configs:
+      # Pro Docker Compose (pokud je Prometheus v docker-compose.yml):
       - targets: ['cumulus3:8800']
+      
+      # Pro centrální Prometheus (upravte IP adresy):
+      # - targets: ['10.0.0.10:8800', '10.0.0.11:8800', '10.0.0.12:8800']
+      #   labels:
+      #     environment: 'production'
+      #     cluster: 'cumulus3-cluster'
+    
     metrics_path: '/metrics'
-    scrape_interval: 10s
+    scrape_interval: 15s
+    scrape_timeout: 10s
