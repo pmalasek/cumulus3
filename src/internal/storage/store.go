@@ -89,23 +89,34 @@ func (s *Store) ReadFile(filename string) (io.ReadCloser, error) {
 
 // WriteBlob zapíše data do volume souboru s optimalizovanou hlavičkou (BlobID)
 func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volumeID int64, offset int64, err error) {
+	// Get current volume ID under short lock
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	currentVol := s.CurrentVolumeID
+	s.mu.Unlock()
 
-	// Lock the current volume specifically as well, to coordinate with compaction
-	volLock := s.getVolumeLock(s.CurrentVolumeID)
+	// Lock only this specific volume to allow parallel writes to different volumes
+	volLock := s.getVolumeLock(currentVol)
 	volLock.Lock()
 	defer volLock.Unlock()
+
+	// Check if volume changed during wait for lock (rotation happened)
+	s.mu.Lock()
+	if s.CurrentVolumeID != currentVol {
+		s.mu.Unlock()
+		// Volume rotated, retry with new volume
+		return s.WriteBlob(blobID, data, compressionAlg)
+	}
+	s.mu.Unlock()
 
 	dataSize := int64(len(data))
 	totalEntrySize := int64(HeaderSize) + dataSize + int64(FooterSize)
 
-	filename := fmt.Sprintf("volume_%08d.dat", s.CurrentVolumeID)
+	filename := fmt.Sprintf("volume_%08d.dat", currentVol)
 	fullPath := filepath.Join(s.BaseDir, filename)
 
 	// If new format doesn't exist, check if legacy exists
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		filenameLegacy := fmt.Sprintf("volume_%d.dat", s.CurrentVolumeID)
+		filenameLegacy := fmt.Sprintf("volume_%d.dat", currentVol)
 		fullPathLegacy := filepath.Join(s.BaseDir, filenameLegacy)
 		if _, err := os.Stat(fullPathLegacy); err == nil {
 			filename = filenameLegacy
@@ -116,14 +127,15 @@ func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volu
 	// Check if we need to rotate
 	if stat, err := os.Stat(fullPath); err == nil {
 		if stat.Size()+totalEntrySize > s.MaxDataFileSize {
+			s.mu.Lock()
 			s.CurrentVolumeID++
-			// New volume always uses new format
-			filename = fmt.Sprintf("volume_%08d.dat", s.CurrentVolumeID)
-			fullPath = filepath.Join(s.BaseDir, filename)
+			s.mu.Unlock()
+			// Retry with new volume
+			return s.WriteBlob(blobID, data, compressionAlg)
 		}
 	}
 
-	volumeID = s.CurrentVolumeID
+	volumeID = currentVol
 
 	f, err := os.OpenFile(fullPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {

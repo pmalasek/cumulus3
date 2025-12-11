@@ -47,7 +47,11 @@ func (m *MetadataSQL) DeleteFile(fileID string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
 
 	// Get blob ID before deleting
 	var blobID int64
@@ -60,7 +64,7 @@ func (m *MetadataSQL) DeleteFile(fileID string) error {
 	}
 
 	// Delete file
-	if _, err := tx.Exec("DELETE FROM files WHERE id = ?", fileID); err != nil {
+	if _, err = tx.Exec("DELETE FROM files WHERE id = ?", fileID); err != nil {
 		return err
 	}
 
@@ -88,17 +92,18 @@ func (m *MetadataSQL) DeleteFile(fileID string) error {
 INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, 0, ?)
 ON CONFLICT(id) DO UPDATE SET size_deleted = size_deleted + ?
 `
-		if _, err := tx.Exec(volQuery, volumeID, totalSize, totalSize); err != nil {
+		if _, err = tx.Exec(volQuery, volumeID, totalSize, totalSize); err != nil {
 			return err
 		}
 
 		// Delete the blob record so it's not copied during compaction
-		if _, err := tx.Exec("DELETE FROM blobs WHERE id = ?", blobID); err != nil {
+		if _, err = tx.Exec("DELETE FROM blobs WHERE id = ?", blobID); err != nil {
 			return err
 		}
 	}
 
-	return tx.Commit()
+	err = tx.Commit()
+	return err
 }
 
 func (m *MetadataSQL) GetStorageStats() (int64, int64, error) {

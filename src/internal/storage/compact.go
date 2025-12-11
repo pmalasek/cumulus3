@@ -69,6 +69,10 @@ func (s *Store) CompactVolume(volumeID int64, meta *MetadataSQL) error {
 	var updates []BlobUpdate
 	var currentOffset int64 = 0
 
+	// Reusable buffer to reduce allocations
+	maxBlobSize := int64(1 << 20) // 1 MB initial size
+	buffer := make([]byte, maxBlobSize)
+
 	for rows.Next() {
 		var id, offset, sizeCompressed int64
 		var hash string
@@ -79,14 +83,19 @@ func (s *Store) CompactVolume(volumeID int64, meta *MetadataSQL) error {
 		// Read blob data
 		// Calculate total size including header/footer
 		blobTotalSize := int64(HeaderSize) + sizeCompressed + int64(FooterSize)
-		buffer := make([]byte, blobTotalSize)
+		
+		// Grow buffer if needed
+		if blobTotalSize > int64(len(buffer)) {
+			buffer = make([]byte, blobTotalSize)
+		}
+		usedBuffer := buffer[:blobTotalSize]
 
-		if _, err := originalFile.ReadAt(buffer, offset); err != nil {
+		if _, err := originalFile.ReadAt(usedBuffer, offset); err != nil {
 			return fmt.Errorf("failed to read blob %d: %w", id, err)
 		}
 
 		// Write to compact file
-		n, err := compactFile.Write(buffer)
+		n, err := compactFile.Write(usedBuffer)
 		if err != nil {
 			return err
 		}
@@ -123,17 +132,22 @@ func (s *Store) CompactVolume(volumeID int64, meta *MetadataSQL) error {
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
-	// 4. Swap files
-	// Close files first
+	// 4. Close files before swap
 	originalFile.Close()
 	compactFile.Close()
 
+	// 5. Swap files BEFORE committing transaction
+	// This ensures if rename fails, transaction is rolled back
 	if err := os.Rename(compactPath, fullPath); err != nil {
 		return err
+	}
+
+	// 6. Commit transaction after successful file swap
+	if err := tx.Commit(); err != nil {
+		// Critical: file is renamed but DB update failed
+		// Try to restore old file (best effort)
+		os.Rename(fullPath, compactPath)
+		return fmt.Errorf("failed to commit transaction after file swap: %w", err)
 	}
 
 	return nil
