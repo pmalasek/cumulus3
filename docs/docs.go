@@ -21,7 +21,6 @@ const docTemplate = `{
         },
         "version": "{{.Version}}"
     },
-    "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
         "/base/files/delete/{id}": {
