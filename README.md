@@ -1,6 +1,22 @@
 # Cumulus3
 
-## Přegenerování SWAGGER
+Vysokovýkonný object storage server s automatickou deduplikací a kompresí.
+
+## 🚀 Produkční nasazení
+
+```bash
+# Spuštění produkčního stacku (Cumulus3 + Nginx + Prometheus + Grafana)
+docker-compose up -d
+
+# Sledování logů
+docker-compose logs -f cumulus3
+```
+
+Podrobná dokumentace: [DEPLOYMENT.md](DEPLOYMENT.md)
+
+## 🛠️ Vývoj
+
+### Přegenerování SWAGGER
 
 ```bash
 swag init -g src/cmd/volume-server/main.go

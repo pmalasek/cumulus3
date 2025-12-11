@@ -130,7 +130,7 @@ func main() {
 	myIP := utils.GetOutboundIP()
 	port := os.Getenv("SERVER_PORT")
 	if port == "" {
-		port = "8080"
+		port = "8800"
 	}
 	docs.SwaggerInfo.Host = fmt.Sprintf("%s:%s", myIP, port)
 

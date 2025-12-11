@@ -1,0 +1,33 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+build/
+tmp/
+
+# Data directories
+data/
+
+# Documentation
+*.md
+!README.md
+LICENSE
+
+# IDE
+.vscode/
+.idea/
+
+# Environment files
+.env
+.env.*
+
+# Air hot-reload
+.air.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+*_test.go

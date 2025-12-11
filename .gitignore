@@ -31,3 +31,7 @@ tmp/
 data/
 metadata.db
 build/
+
+# Docker & deployment
+ssl/
+grafana/
