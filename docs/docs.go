@@ -9,8 +9,14 @@ const docTemplate = `{
     "info": {
         "description": "{{escape .Description}}",
         "title": "{{.Title}}",
+        "contact": {},
+        "license": {
+            "name": "Apache 2.0",
+            "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
+        },
         "version": "{{.Version}}"
     },
+    "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
         "/base/files/delete/{id}": {
@@ -395,6 +401,7 @@ const docTemplate = `{
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
 	Version:          "3.0.1",
+	Host:             "",
 	BasePath:         "/",
 	Schemes:          []string{},
 	Title:            "Cumulus3",

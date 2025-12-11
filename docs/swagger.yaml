@@ -36,19 +36,16 @@ definitions:
           type: string
         type: array
     type: object
-host: localhost:8080
 info:
-  contact:
-    email: support@swagger.io
-    name: API Support
-    url: http://www.swagger.io/support
-  description: This is a sample server for Cumulus3 object storage.
+  contact: {}
+  description: High-performance distributed object storage server in Go (SeaweedFS
+    architecture). Features smart deduplication (BLAKE2b), adaptive Zstd compression,
+    SQLite (WAL) metadata, and native Prometheus metrics.
   license:
     name: Apache 2.0
     url: http://www.apache.org/licenses/LICENSE-2.0.html
-  termsOfService: http://swagger.io/terms/
-  title: Cumulus3 API
-  version: "1.0"
+  title: Cumulus3
+  version: 3.0.1
 paths:
   /base/files/delete/{id}:
     delete:

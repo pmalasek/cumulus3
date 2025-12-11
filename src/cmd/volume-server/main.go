@@ -18,19 +18,13 @@ import (
 	"github.com/pmalasek/cumulus3/src/internal/utils"
 )
 
-// @title Cumulus3 API
-// @version 1.0
-// @description This is a sample server for Cumulus3 object storage.
-// @termsOfService http://swagger.io/terms/
-
-// @contact.name API Support
-// @contact.url http://www.swagger.io/support
-// @contact.email support@swagger.io
+// @title Cumulus3
+// @version 3.0.1
+// @description High-performance distributed object storage server in Go (SeaweedFS architecture). Features smart deduplication (BLAKE2b), adaptive Zstd compression, SQLite (WAL) metadata, and native Prometheus metrics.
 
 // @license.name Apache 2.0
 // @license.url http://www.apache.org/licenses/LICENSE-2.0.html
 
-// @host localhost:8080
 // @BasePath /
 func main() {
 	// Load .env file
