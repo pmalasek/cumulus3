@@ -120,13 +120,20 @@ func main() {
 		MaxUploadSize: maxUploadSize,
 	}
 
-	// Nastavení dynamické IP pro Swagger
-	myIP := utils.GetOutboundIP()
+	// Nastavení Swagger host (můžete nastavit přes SWAGGER_HOST env)
+	// Pokud není nastaveno, Swagger použije aktuální URL v prohlížeči
+	swaggerHost := os.Getenv("SWAGGER_HOST")
+	if swaggerHost != "" {
+		docs.SwaggerInfo.Host = swaggerHost
+	} else {
+		// Necháme prázdné - Swagger použije URL ze kterého se načetl
+		docs.SwaggerInfo.Host = ""
+	}
+
 	port := os.Getenv("SERVER_PORT")
 	if port == "" {
 		port = "8800"
 	}
-	docs.SwaggerInfo.Host = fmt.Sprintf("%s:%s", myIP, port)
 
 	handler := srv.Routes()
 

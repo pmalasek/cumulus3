@@ -271,6 +271,7 @@ Otevřete v prohlížeči:
 |----------|---------|-------|
 | `SERVER_ADDRESS` | `0.0.0.0` | IP adresa serveru |
 | `SERVER_PORT` | `8800` | Port serveru |
+| `SWAGGER_HOST` | - | Host pro Swagger UI (prázdné = použije se aktuální URL) |
 | `DB_PATH` | `/app/data/database/cumulus3.db` | Cesta k databázi |
 | `DATA_DIR` | `/app/data/volumes` | Adresář pro volume soubory |
 | `DATA_FILE_SIZE` | `100MB` | Max. velikost jednoho volume |
