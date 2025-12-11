@@ -338,6 +338,276 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/v2/images/{uuid}": {
+            "get": {
+                "description": "Downloads original image or resized variant (thumb, sm, md, lg). For PDF files, generates thumbnail.",
+                "produces": [
+                    "image/jpeg",
+                    "image/png"
+                ],
+                "tags": [
+                    "03 - Images"
+                ],
+                "summary": "Get image or image variant",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "File UUID",
+                        "name": "uuid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Image content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "415": {
+                        "description": "Not an image or PDF",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/v2/images/{uuid}/lg": {
+            "get": {
+                "description": "Downloads original image or resized variant (thumb, sm, md, lg). For PDF files, generates thumbnail.",
+                "produces": [
+                    "image/jpeg",
+                    "image/png"
+                ],
+                "tags": [
+                    "03 - Images"
+                ],
+                "summary": "Get image or image variant",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "File UUID",
+                        "name": "uuid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Image content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "415": {
+                        "description": "Not an image or PDF",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/v2/images/{uuid}/md": {
+            "get": {
+                "description": "Downloads original image or resized variant (thumb, sm, md, lg). For PDF files, generates thumbnail.",
+                "produces": [
+                    "image/jpeg",
+                    "image/png"
+                ],
+                "tags": [
+                    "03 - Images"
+                ],
+                "summary": "Get image or image variant",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "File UUID",
+                        "name": "uuid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Image content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "415": {
+                        "description": "Not an image or PDF",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/v2/images/{uuid}/sm": {
+            "get": {
+                "description": "Downloads original image or resized variant (thumb, sm, md, lg). For PDF files, generates thumbnail.",
+                "produces": [
+                    "image/jpeg",
+                    "image/png"
+                ],
+                "tags": [
+                    "03 - Images"
+                ],
+                "summary": "Get image or image variant",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "File UUID",
+                        "name": "uuid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Image content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "415": {
+                        "description": "Not an image or PDF",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/v2/images/{uuid}/thumb": {
+            "get": {
+                "description": "Downloads original image or resized variant (thumb, sm, md, lg). For PDF files, generates thumbnail.",
+                "produces": [
+                    "image/jpeg",
+                    "image/png"
+                ],
+                "tags": [
+                    "03 - Images"
+                ],
+                "summary": "Get image or image variant",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "File UUID",
+                        "name": "uuid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Image content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "415": {
+                        "description": "Not an image or PDF",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
