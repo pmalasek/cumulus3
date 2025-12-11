@@ -558,3 +558,8 @@ func (s *FileService) GetFileInfoByOldID(oldID int64, extended bool) (*FileInfo,
 
 	return info, nil
 }
+
+// DeleteFile deletes a file and updates storage stats
+func (s *FileService) DeleteFile(fileID string) error {
+	return s.MetaStore.DeleteFile(fileID)
+}

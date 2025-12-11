@@ -120,6 +120,11 @@ func initSchema(db *sql.DB) error {
 			tags TEXT,
 			FOREIGN KEY(blob_id) REFERENCES blobs(id)
 		);`,
+		`CREATE TABLE IF NOT EXISTS volumes (
+			id INTEGER PRIMARY KEY,
+			size_total INTEGER DEFAULT 0,
+			size_deleted INTEGER DEFAULT 0
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_expires_at ON files(expires_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_old_cumulus_id ON files(old_cumulus_id);`,
 	}
@@ -211,13 +216,32 @@ func (m *MetadataSQL) GetFileType(id int64) (FileType, error) {
 }
 
 func (m *MetadataSQL) UpdateBlobLocation(id int64, volumeID, offset, sizeRaw, sizeCompressed int64, compressionAlg string, fileTypeID int64) error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	query := `
 	UPDATE blobs 
 	SET volume_id = ?, offset = ?, size_raw = ?, size_compressed = ?, compression_alg = ?, file_type_id = ?
 	WHERE id = ?
 	`
-	_, err := m.db.Exec(query, volumeID, offset, sizeRaw, sizeCompressed, compressionAlg, fileTypeID, id)
-	return err
+	if _, err := tx.Exec(query, volumeID, offset, sizeRaw, sizeCompressed, compressionAlg, fileTypeID, id); err != nil {
+		return err
+	}
+
+	// Update volume size
+	totalSize := int64(HeaderSize) + sizeCompressed + int64(FooterSize)
+	volQuery := `
+	INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, ?, 0)
+	ON CONFLICT(id) DO UPDATE SET size_total = size_total + ?
+	`
+	if _, err := tx.Exec(volQuery, volumeID, totalSize, totalSize); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func (m *MetadataSQL) UpdateBlobFileType(blobID int64, fileTypeID int64) error {

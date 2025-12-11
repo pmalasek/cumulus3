@@ -25,6 +25,7 @@ type Store struct {
 	MaxDataFileSize int64
 	mu              sync.Mutex
 	CurrentVolumeID int64
+	volumeLocks     sync.Map
 }
 
 // NewStore vytvoří novou instanci a připraví složku
@@ -62,6 +63,11 @@ func NewStore(dir string, maxDataFileSize int64) *Store {
 	}
 }
 
+func (s *Store) getVolumeLock(volumeID int64) *sync.Mutex {
+	v, _ := s.volumeLocks.LoadOrStore(volumeID, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
 // WriteFile uloží data na disk (legacy)
 func (s *Store) WriteFile(filename string, data io.Reader) error {
 	fullPath := filepath.Join(s.BaseDir, filename)
@@ -85,6 +91,11 @@ func (s *Store) ReadFile(filename string) (io.ReadCloser, error) {
 func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volumeID int64, offset int64, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Lock the current volume specifically as well, to coordinate with compaction
+	volLock := s.getVolumeLock(s.CurrentVolumeID)
+	volLock.Lock()
+	defer volLock.Unlock()
 
 	dataSize := int64(len(data))
 	totalEntrySize := int64(HeaderSize) + dataSize + int64(FooterSize)

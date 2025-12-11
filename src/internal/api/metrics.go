@@ -27,10 +27,32 @@ var (
 			Help: "Total number of storage deduplication hits.",
 		},
 	)
+
+	storageDeletedBytes = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "storage_deleted_bytes_total",
+			Help: "Total bytes marked as deleted in storage volumes.",
+		},
+	)
+
+	storageTotalBytes = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "storage_bytes_total",
+			Help: "Total bytes in storage volumes.",
+		},
+	)
 )
 
 func init() {
 	prometheus.MustRegister(uploadOpsTotal)
 	prometheus.MustRegister(uploadDuration)
 	prometheus.MustRegister(dedupHitsTotal)
+	prometheus.MustRegister(storageDeletedBytes)
+	prometheus.MustRegister(storageTotalBytes)
+}
+
+// UpdateStorageMetrics updates the storage size metrics
+func UpdateStorageMetrics(total, deleted int64) {
+	storageTotalBytes.Set(float64(total))
+	storageDeletedBytes.Set(float64(deleted))
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/pmalasek/cumulus3/docs"
@@ -85,6 +86,20 @@ func main() {
 
 	// 3b. Inicializace Metadata Loggeru (pro disaster recovery)
 	metaLogger := storage.NewMetadataLogger(dataDir)
+
+	// Start metrics updater
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			total, deleted, err := metaStore.GetStorageStats()
+			if err != nil {
+				log.Printf("Error getting storage stats: %v", err)
+				continue
+			}
+			api.UpdateStorageMetrics(total, deleted)
+		}
+	}()
 
 	// 4. Inicializace API serveru (teď už mu budeme posílat i metaStore!)
 	// Pozor: Zde musíme upravit strukturu Server v api/handlers.go (viz další krok)

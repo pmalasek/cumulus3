@@ -32,6 +32,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v2/files/info/", s.HandleFileInfo)
 	mux.HandleFunc("/base/files/id/", s.HandleDownloadByOldID)
 	mux.HandleFunc("/base/files/info/", s.HandleFileInfoByOldID)
+	mux.HandleFunc("/base/files/delete/", s.HandleDelete)
 	mux.HandleFunc("/docs/", httpSwagger.WrapHandler)
 	return mux
 }
@@ -349,9 +350,33 @@ func (s *Server) HandleFileInfoByOldID(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(info)
 }
 
-// {
-//   "fileID": "f73c3c10-f516-4a6b-9f5c-daae1b42e710",
-//   "fileID": "91995bdd-9466-4ace-8183-ef02b3c0cd14",  // PDF
-//   "fileID": "efc284fa-75d9-411b-8099-56fecfdebf46"   // PDF
-//   "fileID": "8113be17-8fb2-47b6-b2c5-5a26e92b62ab"
-// }
+// HandleDelete deletes a file
+// @Summary Delete a file
+// @Description Deletes a file by its ID
+// @Tags files
+// @Param id path string true "File ID"
+// @Success 200 {string} string "File deleted successfully"
+// @Failure 400 {string} string "Bad Request"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /base/files/delete/{id} [delete]
+func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/base/files/delete/")
+	if id == "" {
+		http.Error(w, "File ID is required", http.StatusBadRequest)
+		return
+	}
+
+	err := s.FileService.DeleteFile(id)
+	if err != nil {
+		http.Error(w, "Error deleting file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("File deleted successfully"))
+}
