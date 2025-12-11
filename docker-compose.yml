@@ -15,6 +15,11 @@ services:
     env_file:
       - .env
     
+    environment:
+      # Logování - přepíše hodnoty z .env pokud jsou nastaveny
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LOG_COLOR=false
+    
     volumes:
       # Persistentní úložiště pro databázi a data
       - cumulus3-data:/app/data

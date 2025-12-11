@@ -32,6 +32,10 @@ func main() {
 		log.Println("No .env file found")
 	}
 
+	// Initialize centralized logger
+	utils.InitLogger()
+	utils.Info("STARTUP", "Cumulus3 starting up, log level: %s", utils.GetLogLevel())
+
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
 		dbPath = "./data/database/cumulus3.db"

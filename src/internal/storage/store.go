@@ -214,53 +214,75 @@ func (s *Store) ReadBlob(volumeID int64, offset int64, size int64) ([]byte, erro
 		filenameLegacy := fmt.Sprintf("volume_%d.dat", volumeID)
 		fullPathLegacy := filepath.Join(s.BaseDir, filenameLegacy)
 		f, err = os.Open(fullPathLegacy)
-	}
-
-	if err != nil {
-		return nil, err
+		if err != nil {
+			return nil, fmt.Errorf("volume file not found (tried %s and %s): %w", filename, filenameLegacy, err)
+		}
+		fullPath = fullPathLegacy
+	} else if err != nil {
+		return nil, fmt.Errorf("cannot open volume file %s: %w", fullPath, err)
 	}
 	defer f.Close()
 
+	// Get file size for validation
+	stat, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("cannot stat volume file: %w", err)
+	}
+	fileSize := stat.Size()
+
+	// Validate offset
+	if offset < 0 || offset >= fileSize {
+		return nil, fmt.Errorf("invalid offset %d (file size: %d, volume: %s)", offset, fileSize, fullPath)
+	}
+
+	// Validate that we can read header + data + footer
+	requiredSize := offset + HeaderSize + size + FooterSize
+	if requiredSize > fileSize {
+		return nil, fmt.Errorf("blob extends beyond file end (offset: %d, size: %d, required: %d, file size: %d, volume: %s)",
+			offset, size, requiredSize, fileSize, fullPath)
+	}
+
 	if _, err := f.Seek(offset, 0); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("seek to offset %d failed: %w", offset, err)
 	}
 
 	// 1. Hlavička
 	header := make([]byte, HeaderSize)
 	if _, err := io.ReadFull(f, header); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot read header at offset %d: %w", offset, err)
 	}
 
 	magic := binary.BigEndian.Uint32(header[0:4])
-	// ver := header[4]
-	// comp := header[5]
+	ver := header[4]
+	comp := header[5]
 	storedSize := int64(binary.BigEndian.Uint64(header[6:14]))
-	// blobID := int64(binary.BigEndian.Uint64(header[14:22]))
+	blobID := int64(binary.BigEndian.Uint64(header[14:22]))
 
 	if magic != uint32(MagicBytes) {
-		return nil, os.ErrInvalid // Bad magic
+		return nil, fmt.Errorf("bad magic bytes at offset %d: got 0x%X, expected 0x%X", offset, magic, MagicBytes)
 	}
 	if storedSize != size {
-		return nil, os.ErrInvalid // Size mismatch
+		return nil, fmt.Errorf("size mismatch at offset %d: header says %d, metadata says %d (blobID: %d, ver: %d, comp: %d)",
+			offset, storedSize, size, blobID, ver, comp)
 	}
 
 	// 2. Data
 	data := make([]byte, storedSize)
-	if _, err := io.ReadFull(f, data); err != nil {
-		return nil, err
+	if n, err := io.ReadFull(f, data); err != nil {
+		return nil, fmt.Errorf("cannot read data at offset %d (expected %d bytes, got %d): %w", offset+HeaderSize, storedSize, n, err)
 	}
 
 	// 3. Patička
 	footer := make([]byte, FooterSize)
 	if _, err := io.ReadFull(f, footer); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot read footer at offset %d: %w", offset+HeaderSize+storedSize, err)
 	}
 
 	expectedCrc := binary.BigEndian.Uint32(footer[0:4])
 	actualCrc := crc32.ChecksumIEEE(data)
 
 	if expectedCrc != actualCrc {
-		return nil, os.ErrInvalid // CRC mismatch
+		return nil, fmt.Errorf("CRC mismatch at offset %d: expected 0x%X, got 0x%X (blobID: %d)", offset, expectedCrc, actualCrc, blobID)
 	}
 
 	return data, nil

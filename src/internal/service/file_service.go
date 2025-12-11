@@ -59,6 +59,8 @@ func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, conte
 	result.tempFile.Seek(0, 0)
 	n, _ := io.ReadFull(result.tempFile, detectBuffer)
 	fileType := utils.DetectFileType(detectBuffer[:n])
+	utils.Info("SERVICE", " File type detected: type=%s, subtype=%s, mime=%s, hash=%s",
+		fileType.Type, fileType.Subtype, fileType.ContentType, result.hash)
 
 	// If detection returned generic binary, try to use provided content type or extension
 	if fileType.Type == "binary" && fileType.Subtype == "" {
@@ -75,13 +77,23 @@ func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, conte
 	}
 
 	finalFile, sizeCompressed, alg := s.decideCompression(result)
+	utils.Info("SERVICE", " Compression decision: raw_size=%d, compressed_size=%d, algorithm=%s, hash=%s",
+		result.sizeRaw, sizeCompressed, alg, result.hash)
 
 	blobID, isDedup, err := s.saveBlob(result.hash, finalFile, result.sizeRaw, sizeCompressed, alg, fileType)
 	if err != nil {
+		utils.Info("SERVICE", " ERROR saving blob: hash=%s, error=%v", result.hash, err)
 		return "", false, err
 	}
 
+	if isDedup {
+		utils.Info("SERVICE", " Deduplication hit: hash=%s, blob_id=%d", result.hash, blobID)
+	}
+
 	fileID, err := s.saveFile(filename, blobID, oldCumulusID, expiresAt, tags)
+	if err != nil {
+		utils.Info("SERVICE", " ERROR saving file metadata: filename=%s, blob_id=%d, error=%v", filename, blobID, err)
+	}
 	return fileID, isDedup, err
 }
 
@@ -89,21 +101,29 @@ func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, conte
 func (s *FileService) DownloadFile(fileID string) ([]byte, string, string, error) {
 	file, err := s.MetaStore.GetFile(fileID)
 	if err != nil {
+		utils.Info("SERVICE", " File not found in metadata: file_id=%s, error=%v", fileID, err)
 		return nil, "", "", fmt.Errorf("file not found: %w", err)
 	}
 
 	blob, err := s.MetaStore.GetBlob(file.BlobID)
 	if err != nil {
+		utils.Info("SERVICE", " Blob not found: file_id=%s, blob_id=%d, error=%v", fileID, file.BlobID, err)
 		return nil, "", "", fmt.Errorf("blob not found: %w", err)
 	}
 
 	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
 	if err != nil {
+		utils.Info("SERVICE", " FileType not found: file_id=%s, file_type_id=%d, error=%v", fileID, blob.FileTypeID, err)
 		return nil, "", "", fmt.Errorf("file type not found: %w", err)
 	}
 
+	utils.Info("SERVICE", " Reading blob: file_id=%s, blob_id=%d, volume_id=%d, offset=%d, size=%d, compression=%s",
+		fileID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, blob.CompressionAlg)
+
 	data, err := s.Store.ReadBlob(blob.VolumeID, blob.Offset, blob.SizeCompressed)
 	if err != nil {
+		utils.Info("SERVICE", " ERROR reading blob from storage: file_id=%s, blob_id=%d, volume=%d, offset=%d, size=%d, error=%v",
+			fileID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, err)
 		return nil, "", "", fmt.Errorf("error reading blob: %w", err)
 	}
 

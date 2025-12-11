@@ -80,12 +80,14 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, s.MaxUploadSize)
 	if err := r.ParseMultipartForm(s.MaxUploadSize); err != nil {
+		utils.Info("UPLOAD", " Failed to parse form from %s: %v", r.RemoteAddr, err)
 		http.Error(w, "File too large or invalid form", http.StatusBadRequest)
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		utils.Info("UPLOAD", " Error retrieving file from %s: %v", r.RemoteAddr, err)
 		http.Error(w, "Error retrieving file", http.StatusBadRequest)
 		return
 	}
@@ -126,7 +128,8 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	tagsStr := strings.Join(tags, ",")
 
 	cleanFilename := filepath.Base(header.Filename)
-	fmt.Printf("DATA : %s %v %v %s\n", cleanFilename, oldCumulusID, expiresAt, tagsStr)
+	utils.Info("UPLOAD", " Starting upload: filename=%s, content_type=%s, size=%d, old_id=%v, expires=%v, tags=%s, remote=%s",
+		cleanFilename, header.Header.Get("Content-Type"), header.Size, oldCumulusID, expiresAt, tagsStr, r.RemoteAddr)
 
 	// Determine file type for metrics
 	contentType := header.Header.Get("Content-Type")
@@ -139,8 +142,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	fileID, isDedup, err := s.FileService.UploadFileWithDedup(file, cleanFilename, contentType, oldCumulusID, expiresAt, tagsStr)
 	if err != nil {
 		uploadOpsTotal.WithLabelValues("error", fileTypeLabel).Inc()
-		// We should probably log the error and return 500
-		// For now, just return 500
+		utils.Info("UPLOAD", " ERROR: filename=%s, remote=%s, error=%v", cleanFilename, r.RemoteAddr, err)
 		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -149,6 +151,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if isDedup {
 		dedupHitsTotal.Inc()
 	}
+	utils.Info("UPLOAD", " SUCCESS: filename=%s, file_id=%s, dedup=%v, remote=%s", cleanFilename, fileID, isDedup, r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -175,16 +178,20 @@ func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	// URL is /v2/files/{id}
 	id := strings.TrimPrefix(r.URL.Path, "/v2/files/")
 	if id == "" || id == "/" {
+		utils.Info("DOWNLOAD", " Missing file ID from %s", r.RemoteAddr)
 		http.Error(w, "Missing file ID", http.StatusBadRequest)
 		return
 	}
 
+	utils.Info("DOWNLOAD", " Requesting file_id=%s, remote=%s", id, r.RemoteAddr)
 	data, filename, mimeType, err := s.FileService.DownloadFile(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
+			utils.Info("DOWNLOAD", " File not found: file_id=%s, remote=%s", id, r.RemoteAddr)
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
+		utils.Info("DOWNLOAD", " ERROR: file_id=%s, remote=%s, error=%v", id, r.RemoteAddr, err)
 		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -205,6 +212,7 @@ func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Write(data)
+	utils.Info("DOWNLOAD", " SUCCESS: file_id=%s, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
 }
 
 // HandleFileInfo retrieves file information
@@ -227,6 +235,7 @@ func (s *Server) HandleFileInfo(w http.ResponseWriter, r *http.Request) {
 
 	fileID := strings.TrimPrefix(r.URL.Path, "/v2/files/info/")
 	if fileID == "" || fileID == "/" {
+		utils.Info("FILE_INFO", " Missing file ID from %s", r.RemoteAddr)
 		http.Error(w, "Missing file ID", http.StatusBadRequest)
 		return
 	}
@@ -245,13 +254,16 @@ func (s *Server) HandleFileInfo(w http.ResponseWriter, r *http.Request) {
 	info, err := s.FileService.GetFileInfo(fileID, extended)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			utils.Info("FILE_INFO", " File not found: file_id=%s, remote=%s", fileID, r.RemoteAddr)
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
+		utils.Info("FILE_INFO", " ERROR: file_id=%s, remote=%s, error=%v", fileID, r.RemoteAddr, err)
 		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	utils.Info("FILE_INFO", " SUCCESS: file_id=%s, extended=%v, remote=%s", fileID, extended, r.RemoteAddr)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
 }
@@ -280,16 +292,20 @@ func (s *Server) HandleDownloadByOldID(w http.ResponseWriter, r *http.Request) {
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
+		utils.Info("DOWNLOAD_OLD_ID", " Invalid ID format: id=%s, remote=%s, error=%v", idStr, r.RemoteAddr, err)
 		http.Error(w, "Invalid file ID", http.StatusBadRequest)
 		return
 	}
 
+	utils.Info("DOWNLOAD_OLD_ID", " Requesting old_id=%d, remote=%s", id, r.RemoteAddr)
 	data, filename, mimeType, err := s.FileService.DownloadFileByOldID(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
+			utils.Info("DOWNLOAD_OLD_ID", " File not found: old_id=%d, remote=%s", id, r.RemoteAddr)
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
+		utils.Info("DOWNLOAD_OLD_ID", " ERROR: old_id=%d, remote=%s, error=%v", id, r.RemoteAddr, err)
 		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -310,6 +326,7 @@ func (s *Server) HandleDownloadByOldID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Write(data)
+	utils.Info("DOWNLOAD_OLD_ID", " SUCCESS: old_id=%d, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
 }
 
 // HandleFileInfoByOldID retrieves file information by old Cumulus ID
@@ -384,16 +401,20 @@ func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
 
 	id := strings.TrimPrefix(r.URL.Path, "/base/files/delete/")
 	if id == "" {
+		utils.Info("DELETE", " Missing file ID from %s", r.RemoteAddr)
 		http.Error(w, "File ID is required", http.StatusBadRequest)
 		return
 	}
 
+	utils.Info("DELETE", " Deleting file_id=%s, remote=%s", id, r.RemoteAddr)
 	err := s.FileService.DeleteFile(id)
 	if err != nil {
+		utils.Info("DELETE", " ERROR: file_id=%s, remote=%s, error=%v", id, r.RemoteAddr, err)
 		http.Error(w, "Error deleting file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	utils.Info("DELETE", " SUCCESS: file_id=%s, remote=%s", id, r.RemoteAddr)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("File deleted successfully"))
 }

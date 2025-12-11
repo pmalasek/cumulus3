@@ -50,7 +50,19 @@ docker-compose up -d
 docker-compose logs -f cumulus3
 ```
 
-Detailed documentation: [DEPLOYMENT.md](DEPLOYMENT.md)
+### Test Logging
+
+Run the logging demo script:
+
+```bash
+./test-logging.sh
+```
+
+This script demonstrates different log levels (DEBUG, INFO, ERROR) and formats (text, JSON).
+
+Detailed documentation: 
+- [DEPLOYMENT.md](DEPLOYMENT.md) - Production deployment guide
+- [docs/LOGGING.md](docs/LOGGING.md) - Comprehensive logging documentation
 
 ## 🛠️ VývoDevelopmentj
 

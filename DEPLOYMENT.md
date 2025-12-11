@@ -69,10 +69,22 @@ MAX_UPLOAD_FILE_SIZE=500MB       # Max velikost jednoho uploadu
 USE_COMPRESS=Auto                # Auto/Force/Never
 MINIMAL_COMPRESSION=10           # Minimální úspora v %
 
+# Logování - DŮLEŽITÉ pro produkci!
+LOG_LEVEL=INFO                   # DEBUG | INFO | WARN | ERROR
+LOG_FORMAT=json                  # text | json (json doporučeno pro centralizované logy)
+LOG_COLOR=false                  # false pro produkci (true pouze pro dev)
+
 # Grafana přístup - ZMĚŇTE V PRODUKCI!
 GF_ADMIN_USER=admin
 GF_ADMIN_PASSWORD=changeme       # ← Změňte toto heslo!
 ```
+
+**Poznámky k logování:**
+- `LOG_LEVEL=INFO` je doporučený pro produkci (sbalancované množství informací)
+- `LOG_FORMAT=json` umožňuje snadné parsování v Grafana Loki, ELK, Splunk atd.
+- `LOG_COLOR=false` vypne ANSI barvy v Docker logs
+- Pro debugging změňte na `LOG_LEVEL=DEBUG` a `LOG_FORMAT=text`
+- Podrobnou dokumentaci k logování viz [docs/LOGGING.md](docs/LOGGING.md)
 
 ### Krok 4: SSL certifikáty (volitelné)
 
