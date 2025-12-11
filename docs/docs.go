@@ -9,16 +9,6 @@ const docTemplate = `{
     "info": {
         "description": "{{escape .Description}}",
         "title": "{{.Title}}",
-        "termsOfService": "http://swagger.io/terms/",
-        "contact": {
-            "name": "API Support",
-            "url": "http://www.swagger.io/support",
-            "email": "support@swagger.io"
-        },
-        "license": {
-            "name": "Apache 2.0",
-            "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
-        },
         "version": "{{.Version}}"
     },
     "basePath": "{{.BasePath}}",
@@ -404,12 +394,11 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.0",
-	Host:             "localhost:8080",
+	Version:          "3.0.1",
 	BasePath:         "/",
 	Schemes:          []string{},
-	Title:            "Cumulus3 API",
-	Description:      "This is a sample server for Cumulus3 object storage.",
+	Title:            "Cumulus3",
+	Description:      "High-performance distributed object storage server in Go (SeaweedFS architecture). Features smart deduplication (BLAKE2b), adaptive Zstd compression, SQLite (WAL) metadata, and native Prometheus metrics.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",
