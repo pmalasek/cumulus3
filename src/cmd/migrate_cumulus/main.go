@@ -1,24 +1,71 @@
 package main
 
 import (
+	"bytes"
 	"compress/bzip2"
 	"database/sql"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
-	"github.com/pmalasek/cumulus3/src/internal/service"
-	"github.com/pmalasek/cumulus3/src/internal/storage"
-	"github.com/pmalasek/cumulus3/src/internal/utils"
 )
 
+type MigrationFile struct {
+	FID         int64
+	Filename    string
+	RawID       int64
+	Tags        string
+	ContentType string
+}
+
 func main() {
-	// Load .env file if exists, for destination config
+	// Load .env file if exists
 	_ = godotenv.Load()
+
+	// Custom usage function
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Cumulus Migration Tool - Migrate files from old Cumulus to new Cumulus via API\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: %s [OPTIONS]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Required Options:\n")
+		fmt.Fprintf(os.Stderr, "  -db-host string\n")
+		fmt.Fprintf(os.Stderr, "        Source MySQL database host IP address\n")
+		fmt.Fprintf(os.Stderr, "  -db-user string\n")
+		fmt.Fprintf(os.Stderr, "        Source MySQL database username\n")
+		fmt.Fprintf(os.Stderr, "  -db-name string\n")
+		fmt.Fprintf(os.Stderr, "        Source MySQL database name\n")
+		fmt.Fprintf(os.Stderr, "  -files-path string\n")
+		fmt.Fprintf(os.Stderr, "        Path to source files directory\n\n")
+		fmt.Fprintf(os.Stderr, "Optional Database Options:\n")
+		fmt.Fprintf(os.Stderr, "  -db-port int\n")
+		fmt.Fprintf(os.Stderr, "        Source MySQL database port (default: 3306)\n")
+		fmt.Fprintf(os.Stderr, "  -db-pass string\n")
+		fmt.Fprintf(os.Stderr, "        Source MySQL database password\n\n")
+		fmt.Fprintf(os.Stderr, "API Options:\n")
+		fmt.Fprintf(os.Stderr, "  -api-host string\n")
+		fmt.Fprintf(os.Stderr, "        Cumulus API server host/IP (default: localhost)\n")
+		fmt.Fprintf(os.Stderr, "  -api-port int\n")
+		fmt.Fprintf(os.Stderr, "        Cumulus API server port (default: 8080)\n\n")
+		fmt.Fprintf(os.Stderr, "Performance Options:\n")
+		fmt.Fprintf(os.Stderr, "  -workers int\n")
+		fmt.Fprintf(os.Stderr, "        Number of parallel workers for migration (default: 10)\n")
+		fmt.Fprintf(os.Stderr, "  -limit int\n")
+		fmt.Fprintf(os.Stderr, "        Maximum number of files to migrate (default: 10000)\n\n")
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  %s -db-host 192.168.1.100 -db-user cumulus -db-name cumulus_old -files-path /mnt/files\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -db-host localhost -db-user root -db-pass secret -db-name cumulus \\\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "    -files-path /data/files -api-host cumulus.local -api-port 8080 -workers 20\n\n")
+	}
 
 	// Flags
 	dbHost := flag.String("db-host", "", "Database host IP")
@@ -27,6 +74,12 @@ func main() {
 	dbPass := flag.String("db-pass", "", "Database password")
 	dbName := flag.String("db-name", "", "Database name")
 	filesPath := flag.String("files-path", "", "Path to source files")
+
+	// New flags for API
+	apiHost := flag.String("api-host", "localhost", "Cumulus API host IP")
+	apiPort := flag.Int("api-port", 8080, "Cumulus API port")
+	workers := flag.Int("workers", 10, "Number of parallel workers")
+	limit := flag.Int("limit", 10000, "Maximum number of files to migrate")
 
 	flag.Parse()
 
@@ -47,55 +100,11 @@ func main() {
 		log.Fatalf("Error pinging MySQL: %v", err)
 	}
 
-	// Initialize Destination (Cumulus3)
-	// Using defaults or env vars similar to volume-server
-	destDbPath := os.Getenv("DB_PATH")
-	if destDbPath == "" {
-		destDbPath = "./data/database/cumulus3.db"
-	}
-
-	destDataDir := os.Getenv("DATA_DIR")
-	if destDataDir == "" {
-		destDataDir = "./data"
-	}
-
-	dataFileSizeStr := os.Getenv("DATA_FILE_SIZE")
-	var maxDataFileSize int64 = 10 << 20 // Default 10MB
-	if dataFileSizeStr != "" {
-		if s, err := utils.ParseBytes(dataFileSizeStr); err == nil {
-			maxDataFileSize = s
-		}
-	}
-
-	// Ensure directories exist
-	os.MkdirAll(filepath.Dir(destDbPath), 0755)
-	os.MkdirAll(destDataDir, 0755)
-
-	// Initialize Metadata Store
-	metaStore, err := storage.NewMetadataSQL(fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_sync=NORMAL", destDbPath))
-	if err != nil {
-		log.Fatalf("Error initializing metadata store: %v", err)
-	}
-	defer metaStore.Close()
-
-	// Initialize File Store
-	fileStore := storage.NewStore(destDataDir, maxDataFileSize)
-
-	// Initialize Logger
-	metaLogger := storage.NewMetadataLogger(destDataDir)
-
-	// Initialize Service
-	// Compression defaults
-	compressionMode := os.Getenv("USE_COMPRESS")
-	if compressionMode == "" {
-		compressionMode = "Auto"
-	}
-	minCompressionRatio := 10.0
-
-	fileService := service.NewFileService(fileStore, metaStore, metaLogger, compressionMode, minCompressionRatio)
+	// Build API URL
+	apiURL := fmt.Sprintf("http://%s:%d/v2/files/upload", *apiHost, *apiPort)
 
 	// Execute Query
-	query := `
+	query := fmt.Sprintf(`
         SELECT
             f.id,
             f.files_id,
@@ -110,20 +119,12 @@ func main() {
         where rf.id is not null
         group by f.id
         ORDER BY f.id ASC
-        limit 10000;
-    `
+        LIMIT %d;
+    `, *limit)
 
 	rows, err := db.Query(query)
 	if err != nil {
 		log.Fatalf("Error executing query: %v", err)
-	}
-
-	type MigrationFile struct {
-		FID         int64
-		Filename    string
-		RawID       int64
-		Tags        string
-		ContentType string
 	}
 
 	var filesToMigrate []MigrationFile
@@ -162,61 +163,56 @@ func main() {
 	rows.Close()
 	db.Close() // Close DB connection immediately after reading
 
-	log.Printf("Loaded %d files to migrate. Starting migration...", len(filesToMigrate))
+	log.Printf("Loaded %d files to migrate. Starting migration with %d workers...", len(filesToMigrate), *workers)
 
-	count := 0
-	for _, mFile := range filesToMigrate {
-		// Check if already migrated
-		exists, err := metaStore.FileExistsByOldID(mFile.FID)
-		if err != nil {
-			log.Printf("Error checking existence for ID %d: %v", mFile.FID, err)
-			continue
-		}
-		if exists {
-			log.Printf("Skipping file %s (ID: %d) - already migrated", mFile.Filename, mFile.FID)
-			continue
-		}
-
-		// Calculate path
-		roundedID := roundToThousands(mFile.RawID)
-		inputFileName := getInputFileName(mFile.RawID)
-		fullPath := filepath.Join(*filesPath, fmt.Sprintf("%d", roundedID), inputFileName)
-
-		// Check if source file exists
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-			log.Printf("Source file not found: %s", fullPath)
-			continue
-		}
-
-		// Read file
-		file, err := os.Open(fullPath)
-		if err != nil {
-			log.Printf("Error opening file %s: %v", fullPath, err)
-			continue
-		}
-
-		// Decompress BZ2
-		bz2Reader := bzip2.NewReader(file)
-
-		// Note: UploadFile expects oldCumulusID as *int64
-		oldID := mFile.FID
-
-		// Sanitize filename (remove path)
-		cleanFilename := filepath.Base(mFile.Filename)
-
-		log.Printf("Migrating file: %s (ID: %d, RawID: %d)", cleanFilename, mFile.FID, mFile.RawID)
-
-		_, err = fileService.UploadFile(bz2Reader, cleanFilename, mFile.ContentType, &oldID, nil, mFile.Tags)
-		file.Close() // Close file after upload
-
-		if err != nil {
-			log.Printf("Error uploading file %s: %v", mFile.Filename, err)
-		} else {
-			count++
-		}
+	// Create HTTP client with connection pooling
+	httpClient := &http.Client{
+		Timeout: 5 * time.Minute,
+		Transport: &http.Transport{
+			MaxIdleConns:        *workers,
+			MaxIdleConnsPerHost: *workers,
+			IdleConnTimeout:     90 * time.Second,
+		},
 	}
 
-	log.Printf("Migration completed. Migrated %d files.", count)
+	// Parallel processing
+	var (
+		successCount int64
+		errorCount   int64
+		wg           sync.WaitGroup
+		jobs         = make(chan MigrationFile, *workers*2)
+	)
+
+	// Start workers
+	for i := 0; i < *workers; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for mFile := range jobs {
+				if err := migrateFile(httpClient, apiURL, *filesPath, mFile); err != nil {
+					log.Printf("[Worker %d] ERROR: %s (ID: %d) - %v", workerID, mFile.Filename, mFile.FID, err)
+					atomic.AddInt64(&errorCount, 1)
+				} else {
+					log.Printf("[Worker %d] SUCCESS: %s (ID: %d)", workerID, mFile.Filename, mFile.FID)
+					atomic.AddInt64(&successCount, 1)
+				}
+			}
+		}(i)
+	}
+
+	// Feed jobs
+	startTime := time.Now()
+	for _, mFile := range filesToMigrate {
+		jobs <- mFile
+	}
+	close(jobs)
+
+	// Wait for completion
+	wg.Wait()
+
+	elapsed := time.Since(startTime)
+	log.Printf("Migration completed in %s. Success: %d, Errors: %d, Total: %d",
+		elapsed, successCount, errorCount, len(filesToMigrate))
 }
 
 func roundToThousands(num int64) int64 {
@@ -225,4 +221,82 @@ func roundToThousands(num int64) int64 {
 
 func getInputFileName(id int64) string {
 	return fmt.Sprintf("%010d.bz2", id)
+}
+
+// migrateFile migrates a single file via API
+func migrateFile(client *http.Client, apiURL, filesPath string, mFile MigrationFile) error {
+	// Calculate source file path
+	roundedID := roundToThousands(mFile.RawID)
+	inputFileName := getInputFileName(mFile.RawID)
+	fullPath := filepath.Join(filesPath, fmt.Sprintf("%d", roundedID), inputFileName)
+
+	// Check if source file exists
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		return fmt.Errorf("source file not found: %s", fullPath)
+	}
+
+	// Read and decompress file
+	file, err := os.Open(fullPath)
+	if err != nil {
+		return fmt.Errorf("error opening file: %w", err)
+	}
+	defer file.Close()
+
+	bz2Reader := bzip2.NewReader(file)
+
+	// Read decompressed content into memory
+	decompressedData, err := io.ReadAll(bz2Reader)
+	if err != nil {
+		return fmt.Errorf("error decompressing file: %w", err)
+	}
+
+	// Prepare multipart form
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	// Add file
+	cleanFilename := filepath.Base(mFile.Filename)
+	part, err := writer.CreateFormFile("file", cleanFilename)
+	if err != nil {
+		return fmt.Errorf("error creating form file: %w", err)
+	}
+
+	if _, err := io.Copy(part, bytes.NewReader(decompressedData)); err != nil {
+		return fmt.Errorf("error writing file data: %w", err)
+	}
+
+	// Add old_cumulus_id
+	if err := writer.WriteField("old_cumulus_id", strconv.FormatInt(mFile.FID, 10)); err != nil {
+		return fmt.Errorf("error writing old_cumulus_id: %w", err)
+	}
+
+	// Add tags if present
+	if mFile.Tags != "" {
+		if err := writer.WriteField("tags", mFile.Tags); err != nil {
+			return fmt.Errorf("error writing tags: %w", err)
+		}
+	}
+
+	writer.Close()
+
+	// Create request
+	req, err := http.NewRequest("POST", apiURL, body)
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	// Send request
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
 }
