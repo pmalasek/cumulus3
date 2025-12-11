@@ -27,7 +27,7 @@ RUN mkdir -p build && \
 FROM alpine:latest
 
 # Instalace runtime dependencies
-RUN apk --no-cache add ca-certificates sqlite-libs
+RUN apk --no-cache add ca-certificates sqlite-libs poppler-utils
 
 WORKDIR /app
 
