@@ -197,7 +197,7 @@ func (m *MetadataSQL) GetFile(id string) (File, error) {
 
 func (m *MetadataSQL) GetBlob(id int64) (Blob, error) {
 	var b Blob
-	query := `SELECT id, hash, volume_id, offset, size_raw, size_compressed, compression_alg, file_type_id FROM blobs WHERE id = ?`
+	query := `SELECT id, hash, COALESCE(volume_id, 0), COALESCE(offset, 0), COALESCE(size_raw, 0), COALESCE(size_compressed, 0), COALESCE(compression_alg, ''), COALESCE(file_type_id, 0) FROM blobs WHERE id = ?`
 	err := m.db.QueryRow(query, id).Scan(&b.ID, &b.Hash, &b.VolumeID, &b.Offset, &b.SizeRaw, &b.SizeCompressed, &b.CompressionAlg, &b.FileTypeID)
 	if err != nil {
 		return Blob{}, err

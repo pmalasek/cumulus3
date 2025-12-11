@@ -375,38 +375,61 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 		return 0, false, fmt.Errorf("database error: %w", err)
 	}
 	if exists {
-		// Check if we can improve file type info
+		// Check if blob is valid (not a zombie)
 		currentBlob, err := s.MetaStore.GetBlob(blobID)
 		if err == nil {
-			currentFileType, err := s.MetaStore.GetFileType(currentBlob.FileTypeID)
-			if err == nil {
-				// If current type is generic binary/octet-stream and new type is more specific
-				if currentFileType.Category == "binary" && currentFileType.Subtype == "" && fileType.Type != "binary" {
-					// Update file type
-					newFileTypeID, err := s.MetaStore.GetOrCreateFileType(fileType.ContentType, fileType.Type, fileType.Subtype)
-					if err == nil {
-						s.MetaStore.UpdateBlobFileType(blobID, newFileTypeID)
+			if currentBlob.VolumeID == 0 {
+				// Zombie blob detected (created but not uploaded).
+				// Treat as if it doesn't exist, but reuse the ID.
+				exists = false
+			} else {
+				// Check if we can improve file type info
+				currentFileType, err := s.MetaStore.GetFileType(currentBlob.FileTypeID)
+				if err == nil {
+					// If current type is generic binary/octet-stream and new type is more specific
+					if currentFileType.Category == "binary" && currentFileType.Subtype == "" && fileType.Type != "binary" {
+						// Update file type
+						newFileTypeID, err := s.MetaStore.GetOrCreateFileType(fileType.ContentType, fileType.Type, fileType.Subtype)
+						if err == nil {
+							s.MetaStore.UpdateBlobFileType(blobID, newFileTypeID)
+						}
 					}
 				}
-			}
-		}
-		return blobID, true, nil
-	}
-
-	// 2. Create new blob record to get ID
-	blobID, err = s.MetaStore.CreateBlob(hash)
-	if err != nil {
-		// Handle race condition: another process might have created the blob
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			var exists bool
-			var lookupErr error
-			blobID, exists, lookupErr = s.MetaStore.GetBlobIDByHash(hash)
-			if lookupErr == nil && exists {
-				// Successfully recovered from race condition
 				return blobID, true, nil
 			}
 		}
-		return 0, false, fmt.Errorf("database error creating blob: %w", err)
+	}
+
+	// 2. Create new blob record to get ID
+	if blobID == 0 {
+		blobID, err = s.MetaStore.CreateBlob(hash)
+		if err != nil {
+			// Handle race condition: another process might have created the blob
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				var exists bool
+				var lookupErr error
+				blobID, exists, lookupErr = s.MetaStore.GetBlobIDByHash(hash)
+				if lookupErr == nil && exists {
+					// Successfully recovered from race condition
+					// Check if it's a zombie (race condition with a zombie?)
+					// If it is a zombie, we have the ID now, so we can proceed to overwrite it.
+					// If it is valid, we should return it.
+
+					// For simplicity, if we recover an ID, we assume it's valid or we overwrite it.
+					// But if it's valid, we shouldn't overwrite it!
+
+					// Let's check validity again
+					recoveredBlob, err := s.MetaStore.GetBlob(blobID)
+					if err == nil && recoveredBlob.VolumeID > 0 {
+						return blobID, true, nil
+					}
+					// If it's a zombie, we proceed to upload using this blobID
+				}
+			}
+			if blobID == 0 {
+				return 0, false, fmt.Errorf("database error creating blob: %w", err)
+			}
+		}
 	}
 
 	// 3. Write to storage
