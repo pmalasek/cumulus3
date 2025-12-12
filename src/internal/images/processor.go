@@ -36,8 +36,10 @@ func ResizeImage(data []byte, mimeType string, size ImageSize) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decode image: %w", err)
 	}
 
-	// Aplikace EXIF orientace (pokud existuje)
-	img = applyOrientation(img, data)
+	// Aplikace EXIF orientace (pokud existuje) - jen pro JPEG
+	if format == "jpeg" || format == "jpg" {
+		img = applyOrientation(img, data)
+	}
 
 	// Získání původních rozměrů (po aplikaci orientace)
 	bounds := img.Bounds()
@@ -47,30 +49,50 @@ func ResizeImage(data []byte, mimeType string, size ImageSize) ([]byte, error) {
 	// Výpočet nových rozměrů při zachování aspect ratio
 	newWidth, newHeight := calculateAspectRatioFit(origWidth, origHeight, size.Width, size.Height)
 
-	// Pokud jsou rozměry stejné, vrátíme originál
-	if newWidth == origWidth && newHeight == origHeight {
+	// Pokud jsou rozměry stejné nebo větší (není potřeba zvětšovat), vrátíme originál
+	if newWidth >= origWidth && newHeight >= origHeight {
 		return data, nil
 	}
 
 	// Vytvoření nového obrázku s vypočtenými rozměry
 	dst := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
 
-	// Resize pomocí draw.CatmullRom (high quality)
-	draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
+	// Výběr resample algoritmu podle velikosti výstupu
+	// Pro thumbnaily použijeme rychlejší ApproxBiLinear (2-3x rychlejší)
+	// Pro větší velikosti použijeme CatmullRom (vyšší kvalita)
+	scaler := draw.CatmullRom
+	if size.Width <= 400 { // thumb a sm
+		scaler = draw.ApproxBiLinear
+	}
+	scaler.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
 
 	// Enkódování výsledku
 	var buf bytes.Buffer
+
+	// Volba kvality podle výstupní velikosti
+	quality := 90
+	if size.Width <= 150 { // thumb
+		quality = 80
+	} else if size.Width <= 400 { // sm
+		quality = 85
+	}
+
 	switch format {
 	case "jpeg", "jpg":
-		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: 90})
+		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality})
 	case "png":
-		err = png.Encode(&buf, dst)
+		// PNG může být pomalé pro velké obrázky, pro menší velikosti použijeme JPEG
+		if size.Width <= 400 {
+			err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality})
+		} else {
+			err = png.Encode(&buf, dst)
+		}
 	case "gif":
-		// Pro GIF použijeme PNG (GIF animace by vyžadovaly složitější zpracování)
-		err = png.Encode(&buf, dst)
+		// Pro GIF použijeme JPEG (rychlejší než PNG)
+		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality})
 	default:
 		// Pro ostatní formáty použijeme JPEG
-		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: 90})
+		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality})
 	}
 
 	if err != nil {
@@ -183,8 +205,19 @@ func rotate90(img image.Image) image.Image {
 	width := bounds.Dx()
 	height := bounds.Dy()
 
-	rotated := image.NewRGBA(image.Rect(0, 0, height, width))
+	// Pro RGBA obrázky použijeme rychlejší přístup
+	if rgba, ok := img.(*image.RGBA); ok {
+		rotated := image.NewRGBA(image.Rect(0, 0, height, width))
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				rotated.SetRGBA(height-1-y, x, rgba.RGBAAt(x, y))
+			}
+		}
+		return rotated
+	}
 
+	// Fallback pro ostatní typy
+	rotated := image.NewRGBA(image.Rect(0, 0, height, width))
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			rotated.Set(height-1-y, x, img.At(x, y))
@@ -200,8 +233,19 @@ func rotate180(img image.Image) image.Image {
 	width := bounds.Dx()
 	height := bounds.Dy()
 
-	rotated := image.NewRGBA(image.Rect(0, 0, width, height))
+	// Pro RGBA obrázky použijeme rychlejší přístup
+	if rgba, ok := img.(*image.RGBA); ok {
+		rotated := image.NewRGBA(image.Rect(0, 0, width, height))
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				rotated.SetRGBA(width-1-x, height-1-y, rgba.RGBAAt(x, y))
+			}
+		}
+		return rotated
+	}
 
+	// Fallback pro ostatní typy
+	rotated := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			rotated.Set(width-1-x, height-1-y, img.At(x, y))
@@ -217,8 +261,19 @@ func rotate270(img image.Image) image.Image {
 	width := bounds.Dx()
 	height := bounds.Dy()
 
-	rotated := image.NewRGBA(image.Rect(0, 0, height, width))
+	// Pro RGBA obrázky použijeme rychlejší přístup
+	if rgba, ok := img.(*image.RGBA); ok {
+		rotated := image.NewRGBA(image.Rect(0, 0, height, width))
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				rotated.SetRGBA(y, width-1-x, rgba.RGBAAt(x, y))
+			}
+		}
+		return rotated
+	}
 
+	// Fallback pro ostatní typy
+	rotated := image.NewRGBA(image.Rect(0, 0, height, width))
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			rotated.Set(y, width-1-x, img.At(x, y))
@@ -234,8 +289,19 @@ func flipHorizontal(img image.Image) image.Image {
 	width := bounds.Dx()
 	height := bounds.Dy()
 
-	flipped := image.NewRGBA(image.Rect(0, 0, width, height))
+	// Pro RGBA obrázky použijeme rychlejší přístup
+	if rgba, ok := img.(*image.RGBA); ok {
+		flipped := image.NewRGBA(image.Rect(0, 0, width, height))
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				flipped.SetRGBA(width-1-x, y, rgba.RGBAAt(x, y))
+			}
+		}
+		return flipped
+	}
 
+	// Fallback pro ostatní typy
+	flipped := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			flipped.Set(width-1-x, y, img.At(x, y))
@@ -251,8 +317,19 @@ func flipVertical(img image.Image) image.Image {
 	width := bounds.Dx()
 	height := bounds.Dy()
 
-	flipped := image.NewRGBA(image.Rect(0, 0, width, height))
+	// Pro RGBA obrázky použijeme rychlejší přístup
+	if rgba, ok := img.(*image.RGBA); ok {
+		flipped := image.NewRGBA(image.Rect(0, 0, width, height))
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				flipped.SetRGBA(x, height-1-y, rgba.RGBAAt(x, y))
+			}
+		}
+		return flipped
+	}
 
+	// Fallback pro ostatní typy
+	flipped := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			flipped.Set(x, height-1-y, img.At(x, y))
