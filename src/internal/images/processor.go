@@ -60,11 +60,11 @@ func ResizeImage(data []byte, mimeType string, size ImageSize) ([]byte, error) {
 	// Výběr resample algoritmu podle velikosti výstupu
 	// Pro thumbnaily použijeme rychlejší ApproxBiLinear (2-3x rychlejší)
 	// Pro větší velikosti použijeme CatmullRom (vyšší kvalita)
-	scaler := draw.CatmullRom
 	if size.Width <= 400 { // thumb a sm
-		scaler = draw.ApproxBiLinear
+		draw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
+	} else {
+		draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
 	}
-	scaler.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
 
 	// Enkódování výsledku
 	var buf bytes.Buffer
