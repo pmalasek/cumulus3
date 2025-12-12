@@ -573,7 +573,7 @@ func (s *Server) HandleTempDownloadByOldID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	idStr := strings.TrimPrefix(r.URL.Path, "/base/files/id/")
+	idStr := strings.TrimPrefix(r.URL.Path, "/v2/files/id/")
 	if idStr == "" || idStr == "/" {
 		http.Error(w, "Missing file ID", http.StatusBadRequest)
 		return
