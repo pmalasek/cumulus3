@@ -471,6 +471,15 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 		variant = parts[1]
 	}
 
+	// ETag pro cache - kombinace uuid a varianty
+	etag := fmt.Sprintf(`"%s-%s"`, uuid, variant)
+	
+	// Kontrola If-None-Match pro 304 Not Modified
+	if match := r.Header.Get("If-None-Match"); match == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
 	// Validace varianty
 	var size *images.ImageSize
 	switch variant {
@@ -519,6 +528,9 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 	// Pokud není specifikována varianta, vrátíme originální soubor
 	if size == nil {
 		utils.Info("IMAGE", " Returning original: uuid=%s, size=%d, remote=%s", uuid, len(data), r.RemoteAddr)
+		// Cache headers - originály jsou immutable (UUID se nemění)
+		w.Header().Set("Cache-Control", "public, max-age=2592000, immutable") // 30 dní
+		w.Header().Set("ETag", etag)
 		w.Header().Set("Content-Type", mimeType)
 		encodedFilename := url.PathEscape(filename)
 		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"; filename*=UTF-8''%s", filename, encodedFilename))
@@ -556,6 +568,9 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Nastavíme hlavičky a vrátíme obrázek
+	// Cache headers - varianty jsou immutable (UUID + varianta se nemění)
+	w.Header().Set("Cache-Control", "public, max-age=2592000, immutable") // 30 dní
+	w.Header().Set("ETag", etag)
 	w.Header().Set("Content-Type", mimeType)
 	encodedFilename := url.PathEscape(filename)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"; filename*=UTF-8''%s", filename, encodedFilename))
