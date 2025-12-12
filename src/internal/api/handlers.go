@@ -572,7 +572,7 @@ func (s *Server) HandleTempDownloadByOldID(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
+	utils.Info("TEMP_DOWNLOAD_OLD_ID", " Handler invoked from %s", r.URL.Path)
 	idStr := strings.TrimPrefix(r.URL.Path, "/v2/files/id/")
 	if idStr == "" || idStr == "/" {
 		http.Error(w, "Missing file ID", http.StatusBadRequest)
