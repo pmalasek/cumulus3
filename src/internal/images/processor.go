@@ -1,17 +1,10 @@
 package images
 
 import (
-	"bytes"
 	"fmt"
-	"image"
-	"image/jpeg"
-	"image/png"
 	"strings"
 
-	_ "image/gif"
-
-	"github.com/rwcarlsen/goexif/exif"
-	"golang.org/x/image/draw"
+	"github.com/h2non/bimg"
 )
 
 // ImageSize definuje rozměry pro různé varianty obrázků
@@ -27,82 +20,62 @@ var (
 	SizeLg    = ImageSize{Width: 1200, Height: 1200}
 )
 
-// ResizeImage změní velikost obrázku při zachování aspect ratio
+// ResizeImage změní velikost obrázku při zachování aspect ratio pomocí libvips
 // Obrázek se vejde do zadaného rozměru (fit inside)
 func ResizeImage(data []byte, mimeType string, size ImageSize) ([]byte, error) {
-	// Dekódování obrázku
-	img, format, err := image.Decode(bytes.NewReader(data))
+	// Vytvoření bimg image
+	image := bimg.NewImage(data)
+
+	// Získání metadat (rozměry, formát)
+	metadata, err := image.Metadata()
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode image: %w", err)
+		return nil, fmt.Errorf("failed to read image metadata: %w", err)
 	}
 
-	// Aplikace EXIF orientace (pokud existuje) - jen pro JPEG
-	if format == "jpeg" || format == "jpg" {
-		img = applyOrientation(img, data)
-	}
-
-	// Získání původních rozměrů (po aplikaci orientace)
-	bounds := img.Bounds()
-	origWidth := bounds.Dx()
-	origHeight := bounds.Dy()
-
-	// Výpočet nových rozměrů při zachování aspect ratio
-	newWidth, newHeight := calculateAspectRatioFit(origWidth, origHeight, size.Width, size.Height)
-
-	// Pokud jsou rozměry stejné nebo větší (není potřeba zvětšovat), vrátíme originál
-	if newWidth >= origWidth && newHeight >= origHeight {
+	// Kontrola, zda je potřeba resize (nesnažíme se zvětšovat)
+	if metadata.Size.Width <= size.Width && metadata.Size.Height <= size.Height {
 		return data, nil
 	}
 
-	// Vytvoření nového obrázku s vypočtenými rozměry
-	dst := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
-
-	// Výběr resample algoritmu podle velikosti výstupu
-	// Pro střední velikost (sm) použijeme rychlejší ApproxBiLinear
-	// Pro thumb a větší velikosti použijeme CatmullRom (vyšší kvalita)
-	if size.Width > 150 && size.Width <= 400 { // sm pouze
-		draw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
-	} else {
-		// thumb a md/lg - vysoká kvalita
-		draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
-	}
-
-	// Enkódování výsledku
-	var buf bytes.Buffer
-
 	// Volba kvality podle výstupní velikosti
 	quality := 90
-	if size.Width <= 150 { // thumb - vysoká kvalita i pro malé náhledy
+	if size.Width <= 150 { // thumb
 		quality = 85
 	} else if size.Width <= 400 { // sm
 		quality = 88
 	}
 
-	switch format {
-	case "jpeg", "jpg":
-		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality})
-	case "png":
-		// Pro thumb ponecháme PNG (lepší kvalita), pro sm a větší JPEG (rychlejší)
-		if size.Width <= 150 {
-			err = png.Encode(&buf, dst)
-		} else if size.Width <= 400 {
-			err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality})
-		} else {
-			err = png.Encode(&buf, dst)
-		}
-	case "gif":
-		// Pro GIF použijeme JPEG s vysokou kvalitou
-		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality})
-	default:
-		// Pro ostatní formáty použijeme JPEG
-		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality})
+	// Konfigurace resize operace
+	options := bimg.Options{
+		Width:   size.Width,
+		Height:  size.Height,
+		Quality: quality,
+		Crop:    false,   // false = fit (aspect ratio preserved), true = fill
+		Embed:   false,   // false = shrink only
+		Rotate:  bimg.D0, // Auto-rotation je řešena automaticky v libvips
 	}
 
+	// Určení výstupního formátu
+	isPNG := strings.Contains(mimeType, "png")
+
+	// PNG thumbnaily ponecháme jako PNG pro lepší kvalitu
+	if isPNG && size.Width <= 150 {
+		options.Type = bimg.PNG
+	} else if isPNG && size.Width > 400 {
+		// Větší PNG ponecháme jako PNG
+		options.Type = bimg.PNG
+	} else {
+		// JPEG pro ostatní (rychlejší a menší)
+		options.Type = bimg.JPEG
+	}
+
+	// Provedení resize
+	resized, err := image.Process(options)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode image: %w", err)
+		return nil, fmt.Errorf("failed to resize image: %w", err)
 	}
 
-	return buf.Bytes(), nil
+	return resized, nil
 }
 
 // calculateAspectRatioFit vypočítá nové rozměry při zachování aspect ratio
@@ -147,197 +120,4 @@ func GetOutputMimeType(inputMimeType string) string {
 	}
 	// Pro ostatní včetně JPEG a PDF náhledů
 	return "image/jpeg"
-}
-
-// applyOrientation aplikuje EXIF orientaci na obrázek
-func applyOrientation(img image.Image, data []byte) image.Image {
-	// Pokusíme se načíst EXIF data
-	x, err := exif.Decode(bytes.NewReader(data))
-	if err != nil {
-		// Žádná EXIF data nebo chyba - vrátíme originál
-		return img
-	}
-
-	// Získáme orientaci
-	orientation, err := x.Get(exif.Orientation)
-	if err != nil {
-		// Žádná orientace - vrátíme originál
-		return img
-	}
-
-	orientVal, err := orientation.Int(0)
-	if err != nil {
-		return img
-	}
-
-	// Aplikujeme transformaci podle EXIF orientace
-	// http://sylvana.net/jpegcrop/exif_orientation.html
-	switch orientVal {
-	case 1:
-		// Normal - žádná transformace
-		return img
-	case 2:
-		// Flip horizontal
-		return flipHorizontal(img)
-	case 3:
-		// Rotate 180
-		return rotate180(img)
-	case 4:
-		// Flip vertical
-		return flipVertical(img)
-	case 5:
-		// Rotate 90 CW and flip horizontal
-		return flipHorizontal(rotate90(img))
-	case 6:
-		// Rotate 90 CW
-		return rotate90(img)
-	case 7:
-		// Rotate 270 CW and flip horizontal
-		return flipHorizontal(rotate270(img))
-	case 8:
-		// Rotate 270 CW
-		return rotate270(img)
-	default:
-		return img
-	}
-}
-
-// rotate90 otočí obrázek o 90° ve směru hodinových ručiček
-func rotate90(img image.Image) image.Image {
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	// Pro RGBA obrázky použijeme rychlejší přístup
-	if rgba, ok := img.(*image.RGBA); ok {
-		rotated := image.NewRGBA(image.Rect(0, 0, height, width))
-		for y := 0; y < height; y++ {
-			for x := 0; x < width; x++ {
-				rotated.SetRGBA(height-1-y, x, rgba.RGBAAt(x, y))
-			}
-		}
-		return rotated
-	}
-
-	// Fallback pro ostatní typy
-	rotated := image.NewRGBA(image.Rect(0, 0, height, width))
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			rotated.Set(height-1-y, x, img.At(x, y))
-		}
-	}
-
-	return rotated
-}
-
-// rotate180 otočí obrázek o 180°
-func rotate180(img image.Image) image.Image {
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	// Pro RGBA obrázky použijeme rychlejší přístup
-	if rgba, ok := img.(*image.RGBA); ok {
-		rotated := image.NewRGBA(image.Rect(0, 0, width, height))
-		for y := 0; y < height; y++ {
-			for x := 0; x < width; x++ {
-				rotated.SetRGBA(width-1-x, height-1-y, rgba.RGBAAt(x, y))
-			}
-		}
-		return rotated
-	}
-
-	// Fallback pro ostatní typy
-	rotated := image.NewRGBA(image.Rect(0, 0, width, height))
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			rotated.Set(width-1-x, height-1-y, img.At(x, y))
-		}
-	}
-
-	return rotated
-}
-
-// rotate270 otočí obrázek o 270° ve směru hodinových ručiček (nebo 90° proti)
-func rotate270(img image.Image) image.Image {
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	// Pro RGBA obrázky použijeme rychlejší přístup
-	if rgba, ok := img.(*image.RGBA); ok {
-		rotated := image.NewRGBA(image.Rect(0, 0, height, width))
-		for y := 0; y < height; y++ {
-			for x := 0; x < width; x++ {
-				rotated.SetRGBA(y, width-1-x, rgba.RGBAAt(x, y))
-			}
-		}
-		return rotated
-	}
-
-	// Fallback pro ostatní typy
-	rotated := image.NewRGBA(image.Rect(0, 0, height, width))
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			rotated.Set(y, width-1-x, img.At(x, y))
-		}
-	}
-
-	return rotated
-}
-
-// flipHorizontal převrátí obrázek horizontálně
-func flipHorizontal(img image.Image) image.Image {
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	// Pro RGBA obrázky použijeme rychlejší přístup
-	if rgba, ok := img.(*image.RGBA); ok {
-		flipped := image.NewRGBA(image.Rect(0, 0, width, height))
-		for y := 0; y < height; y++ {
-			for x := 0; x < width; x++ {
-				flipped.SetRGBA(width-1-x, y, rgba.RGBAAt(x, y))
-			}
-		}
-		return flipped
-	}
-
-	// Fallback pro ostatní typy
-	flipped := image.NewRGBA(image.Rect(0, 0, width, height))
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			flipped.Set(width-1-x, y, img.At(x, y))
-		}
-	}
-
-	return flipped
-}
-
-// flipVertical převrátí obrázek vertikálně
-func flipVertical(img image.Image) image.Image {
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	// Pro RGBA obrázky použijeme rychlejší přístup
-	if rgba, ok := img.(*image.RGBA); ok {
-		flipped := image.NewRGBA(image.Rect(0, 0, width, height))
-		for y := 0; y < height; y++ {
-			for x := 0; x < width; x++ {
-				flipped.SetRGBA(x, height-1-y, rgba.RGBAAt(x, y))
-			}
-		}
-		return flipped
-	}
-
-	// Fallback pro ostatní typy
-	flipped := image.NewRGBA(image.Rect(0, 0, width, height))
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			flipped.Set(x, height-1-y, img.At(x, y))
-		}
-	}
-
-	return flipped
 }

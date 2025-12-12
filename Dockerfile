@@ -1,8 +1,14 @@
 # Build stage
 FROM golang:1.25.5-alpine AS builder
 
-# Instalace závislostí potřebných pro kompilaci (sqlite3 vyžaduje gcc)
-RUN apk add --no-cache git gcc musl-dev sqlite-dev
+# Instalace závislostí potřebných pro kompilaci (sqlite3 vyžaduje gcc, libvips pro bimg)
+RUN apk add --no-cache \
+    git \
+    gcc \
+    musl-dev \
+    sqlite-dev \
+    vips-dev \
+    pkgconfig
 
 WORKDIR /app
 
@@ -26,8 +32,12 @@ RUN mkdir -p build && \
 # Runtime stage
 FROM alpine:latest
 
-# Instalace runtime dependencies
-RUN apk --no-cache add ca-certificates sqlite-libs poppler-utils
+# Instalace runtime dependencies (včetně libvips pro image processing)
+RUN apk --no-cache add \
+    ca-certificates \
+    sqlite-libs \
+    poppler-utils \
+    vips
 
 WORKDIR /app
 
