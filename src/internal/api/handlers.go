@@ -24,6 +24,11 @@ type Server struct {
 	MaxUploadSize int64
 }
 
+// UploadResponse represents the response from file upload
+type UploadResponse struct {
+	FileID string `json:"fileID" example:"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"`
+}
+
 // Routes vytvoří router a zaregistruje cesty
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
@@ -55,7 +60,7 @@ func (s *Server) Routes() http.Handler {
 // @Param tags formData string false "Tags like array of string or coma separated strings"
 // @Param old_cumulus_id formData int false "Legacy ID"
 // @Param validity formData string false "Validity period (e.g. '1 day', '2 months')"
-// @Success 201 {object} map[string]string "File uploaded successfully"
+// @Success 201 {object} UploadResponse "File uploaded successfully, returns file UUID"
 // @Failure 400 {string} string "Bad Request"
 // @Failure 413 {string} string "File too large"
 // @Failure 500 {string} string "Internal Server Error"
@@ -151,14 +156,14 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 // HandleDownload downloads a file
 // @Summary Download a file
-// @Description Downloads a file by its GUID
+// @Description Downloads a file by its UUID
 // @Tags 02 - Files
 // @Produce octet-stream
-// @Param id path string true "File GUID"
+// @Param uuid path string true "File UUID"
 // @Success 200 {file} file "File content"
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
-// @Router /v2/files/{FileGUID} [get]
+// @Router /v2/files/{uuid} [get]
 func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -211,13 +216,13 @@ func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 // @Description Get detailed information about a file
 // @Tags 02 - Files
 // @Produce json
-// @Param id path string true "File ID"
+// @Param uuid path string true "File UUID"
 // @Param extended query boolean false "Include base64 content"
 // @Success 200 {object} service.FileInfo
 // @Failure 400 {string} string "Bad Request"
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
-// @Router /v2/files/info/{FileGUID} [get]
+// @Router /v2/files/info/{uuid} [get]
 func (s *Server) HandleFileInfo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -264,11 +269,11 @@ func (s *Server) HandleFileInfo(w http.ResponseWriter, r *http.Request) {
 // @Description Downloads a file by its old Cumulus ID
 // @Tags 01 - Base (internal)
 // @Produce octet-stream
-// @Param id path int true "Old Cumulus ID"
+// @Param cumulus_id path int true "Old Cumulus ID"
 // @Success 200 {file} file "File content"
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
-// @Router /base/files/id/{id} [get]
+// @Router /base/files/id/{cumulus_id} [get]
 func (s *Server) HandleDownloadByOldID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -325,13 +330,13 @@ func (s *Server) HandleDownloadByOldID(w http.ResponseWriter, r *http.Request) {
 // @Description Get detailed information about a file by its old Cumulus ID
 // @Tags 01 - Base (internal)
 // @Produce json
-// @Param id path int true "Old Cumulus ID"
+// @Param cumulus_id path int true "Cumulus ID"
 // @Param extended query boolean false "Include base64 content"
 // @Success 200 {object} service.FileInfo
 // @Failure 400 {string} string "Bad Request"
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
-// @Router /base/files/info/{id} [get]
+// @Router /base/files/info/{cumulus_id} [get]
 func (s *Server) HandleFileInfoByOldID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -377,13 +382,13 @@ func (s *Server) HandleFileInfoByOldID(w http.ResponseWriter, r *http.Request) {
 
 // HandleDelete deletes a file
 // @Summary Delete a file
-// @Description Deletes a file by its ID
+// @Description Deletes a file by its File UUID
 // @Tags 01 - Base (internal)
-// @Param id path string true "File ID"
+// @Param uuid path string true "File UUID"
 // @Success 200 {string} string "File deleted successfully"
 // @Failure 400 {string} string "Bad Request"
 // @Failure 500 {string} string "Internal Server Error"
-// @Router /base/files/delete/{id} [delete]
+// @Router /base/files/delete/{uuid} [delete]
 func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -562,11 +567,11 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 // @Description Downloads a file by its old CumulusID
 // @Tags 02 - Files
 // @Produce octet-stream
-// @Param id path int true "Old CumulusID"
+// @Param cumulus_id path int true "Old CumulusID"
 // @Success 200 {file} file "File content"
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
-// @Router /v2/files/id/{CumulusID} [get]
+// @Router /v2/files/id/{cumulus_id} [get]
 func (s *Server) HandleTempDownloadByOldID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

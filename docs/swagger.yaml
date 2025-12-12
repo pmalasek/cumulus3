@@ -1,5 +1,11 @@
 basePath: /
 definitions:
+  api.UploadResponse:
+    properties:
+      fileID:
+        example: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        type: string
+    type: object
   service.FileInfo:
     properties:
       blob_id:
@@ -47,13 +53,13 @@ info:
   title: Cumulus3
   version: 3.0.1
 paths:
-  /base/files/delete/{id}:
+  /base/files/delete/{uuid}:
     delete:
-      description: Deletes a file by its ID
+      description: Deletes a file by its File UUID
       parameters:
-      - description: File ID
+      - description: File UUID
         in: path
-        name: id
+        name: uuid
         required: true
         type: string
       responses:
@@ -72,13 +78,13 @@ paths:
       summary: Delete a file
       tags:
       - 01 - Base (internal)
-  /base/files/id/{id}:
+  /base/files/id/{cumulus_id}:
     get:
       description: Downloads a file by its old Cumulus ID
       parameters:
       - description: Old Cumulus ID
         in: path
-        name: id
+        name: cumulus_id
         required: true
         type: integer
       produces:
@@ -99,13 +105,13 @@ paths:
       summary: Download a file by old ID
       tags:
       - 01 - Base (internal)
-  /base/files/info/{id}:
+  /base/files/info/{cumulus_id}:
     get:
       description: Get detailed information about a file by its old Cumulus ID
       parameters:
-      - description: Old Cumulus ID
+      - description: Cumulus ID
         in: path
-        name: id
+        name: cumulus_id
         required: true
         type: integer
       - description: Include base64 content
@@ -149,13 +155,13 @@ paths:
       summary: Health check
       tags:
       - 04 - System
-  /v2/files/{FileGUID}:
+  /v2/files/{uuid}:
     get:
-      description: Downloads a file by its GUID
+      description: Downloads a file by its UUID
       parameters:
-      - description: File GUID
+      - description: File UUID
         in: path
-        name: id
+        name: uuid
         required: true
         type: string
       produces:
@@ -176,13 +182,13 @@ paths:
       summary: Download a file
       tags:
       - 02 - Files
-  /v2/files/id/{CumulusID}:
+  /v2/files/id/{cumulus_id}:
     get:
       description: Downloads a file by its old CumulusID
       parameters:
       - description: Old CumulusID
         in: path
-        name: id
+        name: cumulus_id
         required: true
         type: integer
       produces:
@@ -203,13 +209,13 @@ paths:
       summary: Download a file by old CumulusID
       tags:
       - 02 - Files
-  /v2/files/info/{FileGUID}:
+  /v2/files/info/{uuid}:
     get:
       description: Get detailed information about a file
       parameters:
-      - description: File ID
+      - description: File UUID
         in: path
-        name: id
+        name: uuid
         required: true
         type: string
       - description: Include base64 content
@@ -265,11 +271,9 @@ paths:
       - application/json
       responses:
         "201":
-          description: File uploaded successfully
+          description: File uploaded successfully, returns file UUID
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/api.UploadResponse'
         "400":
           description: Bad Request
           schema:

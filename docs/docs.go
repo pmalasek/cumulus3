@@ -19,9 +19,9 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/base/files/delete/{id}": {
+        "/base/files/delete/{uuid}": {
             "delete": {
-                "description": "Deletes a file by its ID",
+                "description": "Deletes a file by its File UUID",
                 "tags": [
                     "01 - Base (internal)"
                 ],
@@ -29,8 +29,8 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "File ID",
-                        "name": "id",
+                        "description": "File UUID",
+                        "name": "uuid",
                         "in": "path",
                         "required": true
                     }
@@ -57,7 +57,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/base/files/id/{id}": {
+        "/base/files/id/{cumulus_id}": {
             "get": {
                 "description": "Downloads a file by its old Cumulus ID",
                 "produces": [
@@ -71,7 +71,7 @@ const docTemplate = `{
                     {
                         "type": "integer",
                         "description": "Old Cumulus ID",
-                        "name": "id",
+                        "name": "cumulus_id",
                         "in": "path",
                         "required": true
                     }
@@ -98,7 +98,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/base/files/info/{id}": {
+        "/base/files/info/{cumulus_id}": {
             "get": {
                 "description": "Get detailed information about a file by its old Cumulus ID",
                 "produces": [
@@ -111,8 +111,8 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "Old Cumulus ID",
-                        "name": "id",
+                        "description": "Cumulus ID",
+                        "name": "cumulus_id",
                         "in": "path",
                         "required": true
                     },
@@ -174,7 +174,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/v2/files/id/{CumulusID}": {
+        "/v2/files/id/{cumulus_id}": {
             "get": {
                 "description": "Downloads a file by its old CumulusID",
                 "produces": [
@@ -188,7 +188,7 @@ const docTemplate = `{
                     {
                         "type": "integer",
                         "description": "Old CumulusID",
-                        "name": "id",
+                        "name": "cumulus_id",
                         "in": "path",
                         "required": true
                     }
@@ -215,7 +215,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/v2/files/info/{FileGUID}": {
+        "/v2/files/info/{uuid}": {
             "get": {
                 "description": "Get detailed information about a file",
                 "produces": [
@@ -228,8 +228,8 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "File ID",
-                        "name": "id",
+                        "description": "File UUID",
+                        "name": "uuid",
                         "in": "path",
                         "required": true
                     },
@@ -310,12 +310,9 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "201": {
-                        "description": "File uploaded successfully",
+                        "description": "File uploaded successfully, returns file UUID",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/api.UploadResponse"
                         }
                     },
                     "400": {
@@ -339,9 +336,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/v2/files/{FileGUID}": {
+        "/v2/files/{uuid}": {
             "get": {
-                "description": "Downloads a file by its GUID",
+                "description": "Downloads a file by its UUID",
                 "produces": [
                     "application/octet-stream"
                 ],
@@ -352,8 +349,8 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "File GUID",
-                        "name": "id",
+                        "description": "File UUID",
+                        "name": "uuid",
                         "in": "path",
                         "required": true
                     }
@@ -652,6 +649,15 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "api.UploadResponse": {
+            "type": "object",
+            "properties": {
+                "fileID": {
+                    "type": "string",
+                    "example": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                }
+            }
+        },
         "service.FileInfo": {
             "type": "object",
             "properties": {
