@@ -58,11 +58,12 @@ func ResizeImage(data []byte, mimeType string, size ImageSize) ([]byte, error) {
 	dst := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
 
 	// Výběr resample algoritmu podle velikosti výstupu
-	// Pro thumbnaily použijeme rychlejší ApproxBiLinear (2-3x rychlejší)
-	// Pro větší velikosti použijeme CatmullRom (vyšší kvalita)
-	if size.Width <= 400 { // thumb a sm
+	// Pro střední velikost (sm) použijeme rychlejší ApproxBiLinear
+	// Pro thumb a větší velikosti použijeme CatmullRom (vyšší kvalita)
+	if size.Width > 150 && size.Width <= 400 { // sm pouze
 		draw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
 	} else {
+		// thumb a md/lg - vysoká kvalita
 		draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
 	}
 
@@ -71,24 +72,26 @@ func ResizeImage(data []byte, mimeType string, size ImageSize) ([]byte, error) {
 
 	// Volba kvality podle výstupní velikosti
 	quality := 90
-	if size.Width <= 150 { // thumb
-		quality = 80
-	} else if size.Width <= 400 { // sm
+	if size.Width <= 150 { // thumb - vysoká kvalita i pro malé náhledy
 		quality = 85
+	} else if size.Width <= 400 { // sm
+		quality = 88
 	}
 
 	switch format {
 	case "jpeg", "jpg":
 		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality})
 	case "png":
-		// PNG může být pomalé pro velké obrázky, pro menší velikosti použijeme JPEG
-		if size.Width <= 400 {
+		// Pro thumb ponecháme PNG (lepší kvalita), pro sm a větší JPEG (rychlejší)
+		if size.Width <= 150 {
+			err = png.Encode(&buf, dst)
+		} else if size.Width <= 400 {
 			err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality})
 		} else {
 			err = png.Encode(&buf, dst)
 		}
 	case "gif":
-		// Pro GIF použijeme JPEG (rychlejší než PNG)
+		// Pro GIF použijeme JPEG s vysokou kvalitou
 		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality})
 	default:
 		// Pro ostatní formáty použijeme JPEG
