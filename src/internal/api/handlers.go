@@ -473,7 +473,7 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 
 	// ETag pro cache - kombinace uuid a varianty
 	etag := fmt.Sprintf(`"%s-%s"`, uuid, variant)
-	
+
 	// Kontrola If-None-Match pro 304 Not Modified
 	if match := r.Header.Get("If-None-Match"); match == etag {
 		w.WriteHeader(http.StatusNotModified)
