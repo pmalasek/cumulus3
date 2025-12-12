@@ -42,7 +42,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v2/files/upload", s.HandleUpload)
 	mux.HandleFunc("/v2/files/", s.HandleDownload)
 	mux.HandleFunc("/v2/files/info/", s.HandleFileInfo)
-	mux.HandleFunc("/v2/files/id/", s.HandleTempDownloadByOldID)
+	mux.HandleFunc("/v2/files/old/", s.HandleTempDownloadByOldID)
+	mux.HandleFunc("/v2/files/old/info/", s.HandleTempFileInfoByOldID)
 
 	mux.HandleFunc("/v2/images/", s.HandleImage)
 
@@ -571,7 +572,7 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {file} file "File content"
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
-// @Router /v2/files/id/{cumulus_id} [get]
+// @Router /v2/files/old/{cumulus_id} [get]
 func (s *Server) HandleTempDownloadByOldID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -621,4 +622,59 @@ func (s *Server) HandleTempDownloadByOldID(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Write(data)
 	utils.Info("DOWNLOAD_OLD_ID", " SUCCESS: old_id=%d, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
+}
+
+// HandleFileInfo retrieves file information
+// @Summary Get file info by old Cumulus ID
+// @Description Get detailed information about a file by its old Cumulus ID
+// @Tags 02 - Files
+// @Produce json
+// @Param cumulus_id path int true "Old CumulusID"
+// @Param extended query boolean false "Include base64 content"
+// @Success 200 {object} service.FileInfo
+// @Failure 400 {string} string "Bad Request"
+// @Failure 404 {string} string "File not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /v2/files/old/info/{cumulus_id} [get]
+func (s *Server) HandleTempFileInfoByOldID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	idStr := strings.TrimPrefix(r.URL.Path, "/v2/files/old/info/")
+	if idStr == "" || idStr == "/" {
+		http.Error(w, "Missing file ID", http.StatusBadRequest)
+		return
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid file ID", http.StatusBadRequest)
+		return
+	}
+
+	extendedStr := r.URL.Query().Get("extended")
+	extended := false
+	if extendedStr != "" {
+		var err error
+		extended, err = strconv.ParseBool(extendedStr)
+		if err != nil {
+			http.Error(w, "Invalid extended parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
+	info, err := s.FileService.GetFileInfoByOldID(id, extended)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
 }

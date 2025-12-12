@@ -182,33 +182,6 @@ paths:
       summary: Download a file
       tags:
       - 02 - Files
-  /v2/files/id/{cumulus_id}:
-    get:
-      description: Downloads a file by its old CumulusID
-      parameters:
-      - description: Old CumulusID
-        in: path
-        name: cumulus_id
-        required: true
-        type: integer
-      produces:
-      - application/octet-stream
-      responses:
-        "200":
-          description: File content
-          schema:
-            type: file
-        "404":
-          description: File not found
-          schema:
-            type: string
-        "500":
-          description: Internal Server Error
-          schema:
-            type: string
-      summary: Download a file by old CumulusID
-      tags:
-      - 02 - Files
   /v2/files/info/{uuid}:
     get:
       description: Get detailed information about a file
@@ -242,6 +215,68 @@ paths:
           schema:
             type: string
       summary: Get file info
+      tags:
+      - 02 - Files
+  /v2/files/old/{cumulus_id}:
+    get:
+      description: Downloads a file by its old CumulusID
+      parameters:
+      - description: Old CumulusID
+        in: path
+        name: cumulus_id
+        required: true
+        type: integer
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: File content
+          schema:
+            type: file
+        "404":
+          description: File not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Download a file by old CumulusID
+      tags:
+      - 02 - Files
+  /v2/files/old/info/{cumulus_id}:
+    get:
+      description: Get detailed information about a file by its old Cumulus ID
+      parameters:
+      - description: Old CumulusID
+        in: path
+        name: cumulus_id
+        required: true
+        type: integer
+      - description: Include base64 content
+        in: query
+        name: extended
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.FileInfo'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "404":
+          description: File not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get file info by old Cumulus ID
       tags:
       - 02 - Files
   /v2/files/upload:
