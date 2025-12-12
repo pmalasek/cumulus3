@@ -37,6 +37,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v2/files/upload", s.HandleUpload)
 	mux.HandleFunc("/v2/files/", s.HandleDownload)
 	mux.HandleFunc("/v2/files/info/", s.HandleFileInfo)
+	mux.HandleFunc("/v2/files/id/", s.HandleTempDownloadByOldID)
 
 	mux.HandleFunc("/v2/images/", s.HandleImage)
 
@@ -157,7 +158,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {file} file "File content"
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
-// @Router /v2/files/{id} [get]
+// @Router /v2/files/{FileGUID} [get]
 func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -216,7 +217,7 @@ func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {string} string "Bad Request"
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
-// @Router /v2/files/info/{id} [get]
+// @Router /v2/files/info/{FileGUID} [get]
 func (s *Server) HandleFileInfo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -554,4 +555,65 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"; filename*=UTF-8''%s", filename, encodedFilename))
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Write(data)
+}
+
+// HandleTempDownloadByOldID downloads a file by its old CumulusID
+// @Summary Download a file by old CumulusID
+// @Description Downloads a file by its old CumulusID
+// @Tags 02 - Files
+// @Produce octet-stream
+// @Param id path int true "Old CumulusID"
+// @Success 200 {file} file "File content"
+// @Failure 404 {string} string "File not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /v2/files/id/{CumulusID} [get]
+func (s *Server) HandleTempDownloadByOldID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	idStr := strings.TrimPrefix(r.URL.Path, "/base/files/id/")
+	if idStr == "" || idStr == "/" {
+		http.Error(w, "Missing file ID", http.StatusBadRequest)
+		return
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		utils.Info("DOWNLOAD_OLD_ID", " Invalid ID format: id=%s, remote=%s, error=%v", idStr, r.RemoteAddr, err)
+		http.Error(w, "Invalid file ID", http.StatusBadRequest)
+		return
+	}
+
+	utils.Info("DOWNLOAD_OLD_ID", " Requesting old_id=%d, remote=%s", id, r.RemoteAddr)
+	data, filename, mimeType, err := s.FileService.DownloadFileByOldID(id)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			utils.Info("DOWNLOAD_OLD_ID", " File not found: old_id=%d, remote=%s", id, r.RemoteAddr)
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+		utils.Info("DOWNLOAD_OLD_ID", " ERROR: old_id=%d, remote=%s, error=%v", id, r.RemoteAddr, err)
+		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", mimeType)
+	encodedFilename := url.PathEscape(filename)
+
+	// Determine disposition based on mime type
+	disposition := "attachment"
+	if strings.HasPrefix(mimeType, "image/") ||
+		strings.HasPrefix(mimeType, "video/") ||
+		strings.HasPrefix(mimeType, "audio/") ||
+		mimeType == "application/pdf" ||
+		mimeType == "text/plain" {
+		disposition = "inline"
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Write(data)
+	utils.Info("DOWNLOAD_OLD_ID", " SUCCESS: old_id=%d, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
 }

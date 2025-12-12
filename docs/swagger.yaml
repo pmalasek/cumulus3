@@ -149,7 +149,7 @@ paths:
       summary: Health check
       tags:
       - 04 - System
-  /v2/files/{id}:
+  /v2/files/{FileGUID}:
     get:
       description: Downloads a file by its GUID
       parameters:
@@ -176,7 +176,34 @@ paths:
       summary: Download a file
       tags:
       - 02 - Files
-  /v2/files/info/{id}:
+  /v2/files/id/{CumulusID}:
+    get:
+      description: Downloads a file by its old CumulusID
+      parameters:
+      - description: Old CumulusID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: File content
+          schema:
+            type: file
+        "404":
+          description: File not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Download a file by old CumulusID
+      tags:
+      - 02 - Files
+  /v2/files/info/{FileGUID}:
     get:
       description: Get detailed information about a file
       parameters:

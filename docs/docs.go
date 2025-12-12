@@ -174,7 +174,48 @@ const docTemplate = `{
                 }
             }
         },
-        "/v2/files/info/{id}": {
+        "/v2/files/id/{CumulusID}": {
+            "get": {
+                "description": "Downloads a file by its old CumulusID",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "02 - Files"
+                ],
+                "summary": "Download a file by old CumulusID",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Old CumulusID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "File content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/v2/files/info/{FileGUID}": {
             "get": {
                 "description": "Get detailed information about a file",
                 "produces": [
@@ -298,7 +339,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/v2/files/{id}": {
+        "/v2/files/{FileGUID}": {
             "get": {
                 "description": "Downloads a file by its GUID",
                 "produces": [
