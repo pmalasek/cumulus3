@@ -74,10 +74,6 @@ LOG_LEVEL=INFO                   # DEBUG | INFO | WARN | ERROR
 LOG_FORMAT=json                  # text | json (json doporučeno pro centralizované logy)
 LOG_COLOR=false                  # false pro produkci (true pouze pro dev)
 
-# Grafana přístup - ZMĚŇTE V PRODUKCI!
-GF_ADMIN_USER=admin
-GF_ADMIN_PASSWORD=changeme       # ← Změňte toto heslo!
-```
 
 **Poznámky k logování:**
 - `LOG_LEVEL=INFO` je doporučený pro produkci (sbalancované množství informací)
@@ -135,9 +131,6 @@ docker compose ps
 
 # Měli byste vidět:
 # - cumulus3 (running)
-# - cumulus3-nginx (running)
-# - cumulus3-prometheus (running)
-# - cumulus3-grafana (running)
 
 # Test health endpointu
 curl http://localhost:8800/health
@@ -150,10 +143,6 @@ curl http://localhost:8800/health
 ```bash
 # Povolení Cumulus3 portu pro centrální Nginx/Prometheus
 sudo ufw allow 8800/tcp      # Cumulus3 API
-
-# Pokud používáte lokální monitoring (zakomentovaný v docker-compose.yml):
-# sudo ufw allow from 10.0.0.0/8 to any port 3000  # Grafana
-# sudo ufw allow from 10.0.0.0/8 to any port 9090  # Prometheus
 
 # Pokud používáte lokální Nginx (zakomentovaný v docker-compose.yml):
 # sudo ufw allow 80/tcp       # HTTP
@@ -270,8 +259,6 @@ Otevřete v prohlížeči:
 - **Swagger dokumentace**: `http://server-ip:8800/swagger/index.html`
 - **Přes centrální Nginx**: `https://cumulus.vase-domena.cz/`
 - **Metriky**: `http://server-ip:8800/metrics`
-- **Centrální Prometheus**: Ověřte, že se Cumulus3 objevil v targets
-- **Centrální Grafana**: Vytvořte dashboard s Cumulus3 metrikami
 
 ## 📊 Přístup k rozhraním
 
@@ -294,8 +281,6 @@ Otevřete v prohlížeči:
 ### Volumes
 
 - `cumulus3-data` - Persistentní úložiště pro databázi a data
-
-> **💡 Poznámka**: Prometheus a Grafana volumes jsou zakomentovány, protože se očekává použití centrálních služeb.
 
 ## Struktura dat
 
@@ -320,8 +305,6 @@ Přístup k jednotlivým službám:
 | **Přes centrální Nginx** | `https://cumulus.vase-domena.cz` | Doporučeno pro produkci |
 | **Swagger UI** | `http://localhost:8800/swagger/index.html` | API dokumentace |
 | **Metriky** | `http://localhost:8800/metrics` | Prometheus metriky |
-| **Centrální Prometheus** | Váš Prometheus server | Přidejte Cumulus3 do scrape_configs |
-| **Centrální Grafana** | Váš Grafana server | Vytvořte dashboard |
 
 > ⚠️ **Bezpečnost**
 >
@@ -764,15 +747,10 @@ docker exec cumulus3 /app/migrate_cumulus --help
 
 3. **Použijte SSD disky** pro `/app/data` volume
 
-4. **Monitorujte metriky** v Grafana pro optimalizaci
-
 ## ❓ FAQ
 
 **Q: Potřebuji Nginx v docker-compose.yml?**  
 A: Ne, Nginx je zakomentovaný. Pro produkci je lepší použít centrální Nginx/reverse proxy server. Cumulus3 běží přímo na portu 8800.
-
-**Q: Potřebuji lokální Prometheus a Grafana?**  
-A: Ne, jsou zakomentované. Doporučuje se použít centrální Prometheus/Grafana. Pokud chcete lokální monitoring, odkomentujte služby v `docker-compose.yml`.
 
 **Q: Mohu změnit port 8800 na jiný?**  
 A: Ano, upravte `SERVER_PORT` v `.env` a port mapping v `docker-compose.yml`.
@@ -787,4 +765,4 @@ A: Použijte nástroj `/app/migrate_cumulus` v kontejneru.
 
 - **Issues**: [GitHub Issues](https://github.com/pmalasek/cumulus3/issues)
 - **Dokumentace**: [README.md](README.md)
-- **Email**: support@vase-domena.cz
+- **Email**: <petr.malasek@gmail.com>

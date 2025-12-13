@@ -116,7 +116,6 @@ Cumulus3 solves these problems by:
   - Active connections and request rates
 - **Structured logging**: JSON format for log aggregation (Grafana Loki, ELK, Splunk)
 - **Health check endpoint**: `/health` for load balancers and orchestration
-- **Grafana dashboards**: Pre-built dashboards included in deployment
 
 ### 🔄 Legacy System Migration
 
@@ -126,7 +125,7 @@ Cumulus3 solves these problems by:
 
 ### 🛡️ Production-Ready
 
-- **Docker deployment**: Complete Docker Compose stack with Nginx, Prometheus, Grafana
+- **Docker deployment**: Complete Docker Compose
 - **Horizontal scalability**: Multiple instances with shared storage backend
 - **Graceful shutdown**: Proper cleanup and connection draining
 - **Request size limits**: Configurable upload limits to prevent abuse
@@ -291,10 +290,10 @@ Cumulus3 is ideal for:
    ```
 
 6. **Access the application:**
-   - API: http://localhost:8800
-   - Swagger UI: http://localhost:8800/docs/
-   - Health check: http://localhost:8800/health
-   - Metrics: http://localhost:8800/metrics
+   - API: <http://localhost:8800>
+   - Swagger UI: <http://localhost:8800/docs/>
+   - Health check: <http://localhost:8800/health>
+   - Metrics: <http://localhost:8800/metrics>
 
 ### Production Deployment
 
@@ -323,16 +322,16 @@ Cumulus3 is ideal for:
    ```
 
 3. **Start the stack:**
+
    ```bash
    docker-compose up -d
    ```
    
    This starts:
    - Cumulus3 server (port 8800)
-   - Prometheus (metrics collection)
-   - Grafana (dashboards and visualization)
 
 4. **Verify deployment:**
+
    ```bash
    # Check container status
    docker-compose ps
@@ -345,10 +344,9 @@ Cumulus3 is ideal for:
    ```
 
 5. **Access services:**
-   - Cumulus3 API: http://your-server:8800
-   - Swagger docs: http://your-server:8800/docs/
-   - Grafana: http://your-server:3000 (admin/changeme)
-   - Prometheus: http://your-server:9090
+   - Cumulus3 API: <http://your-server:8800>
+   - Swagger docs: <http://your-server:8800/docs/>
+   - Prometheus: <http://your-server:9090>
 
 #### SSL/TLS Configuration:
 
@@ -715,19 +713,6 @@ Cumulus3 exposes comprehensive metrics at `/metrics`:
 - `cumulus_compression_ratio` - Average compression ratio
 - `cumulus_compressed_bytes_saved` - Bytes saved by compression
 
-### Grafana Dashboards
-
-Pre-built Grafana dashboards included in Docker Compose deployment:
-
-1. **Access Grafana:** http://localhost:3000 (admin/changeme)
-2. **Navigate to Dashboards** → Cumulus3 Overview
-3. **View metrics:**
-   - Upload/download throughput
-   - Deduplication effectiveness
-   - Storage utilization
-   - Response time percentiles
-   - Error rates
-
 ### Health Checks
 
 **Endpoint:** `GET /health`
@@ -916,4 +901,4 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 **Project:** Cumulus3  
 **Version:** 3.0.1  
 **Author:** Petr Malásek  
-**Repository:** https://github.com/pmalasek/cumulus3
+**Repository:** <https://github.com/pmalasek/cumulus3>
