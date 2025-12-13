@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,8 +227,9 @@ func (s *Store) WriteBlobWithMetadata(blobID int64, data []byte, compressionAlg 
 	var f *os.File
 	var filename, fullPath string
 	triedVolumes := make(map[int64]bool) // Track which volumes we already tried
+	maxRetries := 100                    // Prevent infinite loop
 
-	for {
+	for len(triedVolumes) < maxRetries {
 		// Check if we already tried this volume
 		if triedVolumes[targetVol] {
 			// Already tried this volume, move to next
@@ -262,6 +264,12 @@ func (s *Store) WriteBlobWithMetadata(blobID int64, data []byte, compressionAlg 
 			if currentSize+totalEntrySize > s.MaxDataFileSize {
 				// Volume is full after all, unlock and try next one
 				volLock.Unlock()
+
+				// Log if we've tried many volumes already
+				if len(triedVolumes) > 10 {
+					log.Printf("WARNING: Volume %d is full (size=%d, required=%d, max=%d), tried %d volumes so far",
+						targetVol, currentSize, totalEntrySize, s.MaxDataFileSize, len(triedVolumes))
+				}
 
 				// Try next volume
 				s.mu.Lock()
@@ -332,6 +340,11 @@ func (s *Store) WriteBlobWithMetadata(blobID int64, data []byte, compressionAlg 
 
 		// Success, break out of retry loop
 		break
+	}
+
+	// Check if we exited loop without success (reached max retries)
+	if volumeID == 0 {
+		return 0, 0, 0, fmt.Errorf("failed to write blob after trying %d volumes: all volumes are full or locked", len(triedVolumes))
 	}
 
 	// Return actual bytes written (header + data + footer)
