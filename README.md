@@ -915,5 +915,5 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 **Project:** Cumulus3  
 **Version:** 3.0.1  
-**Author:** Pavel Malásek  
+**Author:** Petr Malásek  
 **Repository:** https://github.com/pmalasek/cumulus3
