@@ -71,6 +71,7 @@ func printStartupConfiguration() {
 		"MINIMAL_COMPRESSION",
 		"SWAGGER_HOST",
 		"LOG_LEVEL",
+		"CLEANUP_INTERVAL",
 	}
 
 	for _, param := range configParams {
@@ -159,6 +160,46 @@ func main() {
 				continue
 			}
 			api.UpdateStorageMetrics(total, deleted)
+		}
+	}()
+
+	// Start expired temporary files cleanup
+	cleanupIntervalStr := os.Getenv("CLEANUP_INTERVAL")
+	if cleanupIntervalStr == "" {
+		cleanupIntervalStr = "1h" // Default: 1 hour
+	}
+	cleanupInterval, err := time.ParseDuration(cleanupIntervalStr)
+	if err != nil {
+		utils.Warn("CONFIG", "Invalid CLEANUP_INTERVAL format '%s': %v, using default 1h", cleanupIntervalStr, err)
+		cleanupInterval = 1 * time.Hour
+	}
+
+	go func() {
+		// Run first cleanup after 1 minute to avoid startup overhead
+		time.Sleep(1 * time.Minute)
+
+		ticker := time.NewTicker(cleanupInterval)
+		defer ticker.Stop()
+
+		utils.Info("CLEANUP", "Expired temporary files cleanup scheduled every %v", cleanupInterval)
+
+		// Run cleanup immediately on first iteration
+		for {
+			utils.Info("CLEANUP", "Starting cleanup of expired temporary files")
+			deletedCount, totalExpired, _, err := metaStore.CleanupExpiredTemporaryFiles()
+			if err != nil {
+				utils.Error("CLEANUP", "Error cleaning up expired files: %v", err)
+			} else if totalExpired == 0 {
+				utils.Info("CLEANUP", "No expired temporary files found")
+			} else if deletedCount == totalExpired {
+				utils.Info("CLEANUP", "Successfully cleaned up %d expired temporary file(s)", deletedCount)
+			} else if deletedCount > 0 {
+				utils.Warn("CLEANUP", "Cleaned up %d of %d expired temporary files (%d failed)", deletedCount, totalExpired, totalExpired-deletedCount)
+			} else {
+				utils.Error("CLEANUP", "Found %d expired files but all deletions failed", totalExpired)
+			}
+
+			<-ticker.C
 		}
 	}()
 

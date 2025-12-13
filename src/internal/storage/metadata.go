@@ -115,3 +115,35 @@ func (m *MetadataSQL) GetStorageStats() (int64, int64, error) {
 	}
 	return total.Int64, deleted.Int64, nil
 }
+
+// CleanupExpiredTemporaryFiles finds and deletes expired temporary files
+// that are safe to delete (their blob is not referenced by any other valid file)
+// Returns the number of successfully deleted files and any error encountered
+func (m *MetadataSQL) CleanupExpiredTemporaryFiles() (int, int, int, error) {
+	// Get list of expired file IDs that are safe to delete
+	fileIDs, totalExpired, err := m.GetExpiredTemporaryFiles()
+	if err != nil {
+		return 0, totalExpired, 0, err
+	}
+
+	safeToDel := len(fileIDs)
+	if safeToDel == 0 {
+		return 0, totalExpired, 0, nil
+	}
+
+	deletedCount := 0
+	failedCount := 0
+	failedIDs := []string{}
+
+	for _, fileID := range fileIDs {
+		if err := m.DeleteFile(fileID); err != nil {
+			// Log error but continue with other files
+			failedCount++
+			failedIDs = append(failedIDs, fileID)
+			continue
+		}
+		deletedCount++
+	}
+
+	return deletedCount, totalExpired, safeToDel, nil
+}

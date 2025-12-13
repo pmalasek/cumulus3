@@ -155,12 +155,42 @@ func (m *MetadataSQL) SaveFile(file File) error {
 }
 
 func (m *MetadataSQL) CleanupExpiredFiles() (int64, error) {
-	query := `DELETE FROM files WHERE expires_at < CURRENT_TIMESTAMP`
+	query := `DELETE FROM files WHERE expires_at < datetime('now', 'localtime')`
 	res, err := m.db.Exec(query)
 	if err != nil {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// GetExpiredTemporaryFiles returns list of file IDs that have expired.
+// The file record will be deleted, but blob deletion is handled by DeleteFile()
+// which checks reference count - blob is only deleted if no other files reference it.
+func (m *MetadataSQL) GetExpiredTemporaryFiles() ([]string, int, error) {
+	query := `
+		SELECT id
+		FROM files
+		WHERE expires_at IS NOT NULL 
+		  AND expires_at < datetime('now', 'localtime')
+	`
+
+	rows, err := m.db.Query(query)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var fileIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, 0, err
+		}
+		fileIDs = append(fileIDs, id)
+	}
+
+	totalExpired := len(fileIDs)
+	return fileIDs, totalExpired, rows.Err()
 }
 
 func (m *MetadataSQL) GetBlobIDByHash(hash string) (int64, bool, error) {
