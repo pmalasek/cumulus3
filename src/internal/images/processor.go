@@ -21,7 +21,8 @@ var (
 )
 
 // ResizeImage změní velikost obrázku při zachování aspect ratio pomocí libvips
-// Obrázek se vejde do zadaného rozměru (fit inside)
+// Obrázek se vejde do zadaného rozměru (fit inside) - nikdy se nenatahuje nebo neořezává
+// Výsledný obrázek může být menší než zadaná velikost, pokud má jiný aspect ratio
 func ResizeImage(data []byte, mimeType string, size ImageSize) ([]byte, error) {
 	// Vytvoření bimg image
 	image := bimg.NewImage(data)
@@ -45,13 +46,17 @@ func ResizeImage(data []byte, mimeType string, size ImageSize) ([]byte, error) {
 		quality = 88
 	}
 
+	// Vypočítáme cílové rozměry při zachování aspect ratio
+	newWidth, newHeight := calculateAspectRatioFit(metadata.Size.Width, metadata.Size.Height, size.Width, size.Height)
+
 	// Konfigurace resize operace
+	// Používáme vypočítané rozměry, které už zachovávají aspect ratio
 	options := bimg.Options{
-		Width:   size.Width,
-		Height:  size.Height,
+		Width:   newWidth,
+		Height:  newHeight,
 		Quality: quality,
-		Crop:    false,   // false = fit (aspect ratio preserved), true = fill
-		Embed:   false,   // false = shrink only
+		Force:   true,    // true = použij přesně tyto rozměry (už jsou správně vypočítané)
+		Enlarge: false,   // false = nezvětšuje menší obrázky
 		Rotate:  bimg.D0, // Auto-rotation je řešena automaticky v libvips
 	}
 

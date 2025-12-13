@@ -117,6 +117,7 @@ func (s *FileService) DownloadFile(fileID string) ([]byte, string, string, error
 		return nil, "", "", fmt.Errorf("file type not found: %w", err)
 	}
 
+	utils.Info("SERVICE", " FileType from DB: file_id=%s, mime=%s, category=%s, subtype=%s", fileID, fileType.MimeType, fileType.Category, fileType.Subtype)
 	utils.Info("SERVICE", " Reading blob: file_id=%s, blob_id=%d, volume_id=%d, offset=%d, size=%d, compression=%s",
 		fileID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, blob.CompressionAlg)
 
@@ -156,7 +157,14 @@ func (s *FileService) DownloadFile(fileID string) ([]byte, string, string, error
 		return nil, "", "", fmt.Errorf("unknown compression algorithm: %s", blob.CompressionAlg)
 	}
 
-	return decompressedData, file.Name, fileType.MimeType, nil
+	// Fallback if mime type is empty
+	mimeType := fileType.MimeType
+	if mimeType == "" {
+		mimeType = s.determineMimeType(file.Name, "")
+		utils.Info("SERVICE", " Empty mime type from DB, using fallback: file_id=%s, fallback_mime=%s", fileID, mimeType)
+	}
+
+	return decompressedData, file.Name, mimeType, nil
 }
 
 // DownloadFileByOldID retrieves a file by its old Cumulus ID
@@ -210,7 +218,14 @@ func (s *FileService) DownloadFileByOldID(oldID int64) ([]byte, string, string, 
 		return nil, "", "", fmt.Errorf("unknown compression algorithm: %s", blob.CompressionAlg)
 	}
 
-	return decompressedData, file.Name, fileType.MimeType, nil
+	// Fallback if mime type is empty
+	mimeType := fileType.MimeType
+	if mimeType == "" {
+		mimeType = s.determineMimeType(file.Name, "")
+		utils.Info("SERVICE", " Empty mime type from DB, using fallback: old_id=%d, fallback_mime=%s", oldID, mimeType)
+	}
+
+	return decompressedData, file.Name, mimeType, nil
 }
 
 // determineMimeType tries to detect the MIME type from Content-Type header or filename extension

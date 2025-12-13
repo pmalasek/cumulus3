@@ -38,6 +38,53 @@ import (
 // @tag.description System endpoints - health checks, metrics
 
 // @BasePath /
+
+// printStartupConfiguration prints all configuration parameters at startup
+func printStartupConfiguration() {
+	utils.Info("CONFIG", "=== Startup Configuration ===")
+
+	// Helper function to mask passwords
+	maskIfPassword := func(key, value string) string {
+		lowerKey := strings.ToLower(key)
+		if strings.Contains(lowerKey, "password") ||
+			strings.Contains(lowerKey, "passwd") ||
+			strings.Contains(lowerKey, "secret") ||
+			strings.Contains(lowerKey, "token") ||
+			strings.Contains(lowerKey, "key") && !strings.Contains(lowerKey, "key_path") {
+			if value != "" {
+				return "********"
+			}
+			return ""
+		}
+		return value
+	}
+
+	// Define configuration parameters to display
+	configParams := []string{
+		"DB_PATH",
+		"DATA_DIR",
+		"DATA_FILE_SIZE",
+		"MAX_UPLOAD_FILE_SIZE",
+		"SERVER_PORT",
+		"SERVER_ADDRESS",
+		"USE_COMPRESS",
+		"MINIMAL_COMPRESSION",
+		"SWAGGER_HOST",
+		"LOG_LEVEL",
+	}
+
+	for _, param := range configParams {
+		value := os.Getenv(param)
+		displayValue := maskIfPassword(param, value)
+		if value == "" {
+			displayValue = "(not set)"
+		}
+		utils.Info("CONFIG", "  %s = %s", param, displayValue)
+	}
+
+	utils.Info("CONFIG", "=============================")
+}
+
 func main() {
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
@@ -46,6 +93,10 @@ func main() {
 
 	// Initialize centralized logger
 	utils.InitLogger()
+
+	// Print all configuration parameters
+	printStartupConfiguration()
+
 	utils.Info("STARTUP", "Cumulus3 starting up, log level: %s", utils.GetLogLevel())
 
 	dbPath := os.Getenv("DB_PATH")
@@ -59,7 +110,7 @@ func main() {
 		if s, err := utils.ParseBytes(dataFileSizeStr); err == nil {
 			maxDataFileSize = s
 		} else {
-			log.Printf("Invalid DATA_FILE_SIZE format: %v, using default", err)
+			utils.Warn("CONFIG", "Invalid DATA_FILE_SIZE format: %v, using default", err)
 		}
 	}
 
@@ -69,7 +120,7 @@ func main() {
 		if s, err := utils.ParseBytes(maxUploadFileSizeStr); err == nil {
 			maxUploadSize = s
 		} else {
-			log.Printf("Invalid MAX_UPLOAD_FILE_SIZE format: %v, using default", err)
+			utils.Warn("CONFIG", "Invalid MAX_UPLOAD_FILE_SIZE format: %v, using default", err)
 		}
 	}
 
@@ -104,7 +155,7 @@ func main() {
 		for range ticker.C {
 			total, deleted, err := metaStore.GetStorageStats()
 			if err != nil {
-				log.Printf("Error getting storage stats: %v", err)
+				utils.Error("METRICS", "Error getting storage stats: %v", err)
 				continue
 			}
 			api.UpdateStorageMetrics(total, deleted)
@@ -125,7 +176,7 @@ func main() {
 		if v, err := strconv.ParseFloat(val, 64); err == nil {
 			minCompressionRatio = v
 		} else {
-			log.Printf("Invalid MINIMAL_COMPRESSION format: %v, using default 10%%", err)
+			utils.Warn("CONFIG", "Invalid MINIMAL_COMPRESSION format: %v, using default 10%%", err)
 		}
 	}
 
@@ -153,6 +204,12 @@ func main() {
 
 	handler := srv.Routes()
 
-	fmt.Println("🚀 Běžíme na " + os.Getenv("SERVER_ADDRESS") + ":" + port)
-	http.ListenAndServe(os.Getenv("SERVER_ADDRESS")+":"+port, handler)
+	serverAddr := os.Getenv("SERVER_ADDRESS") + ":" + port
+	utils.Info("STARTUP", "🚀 Server listening on %s", serverAddr)
+	http.ListenAndServe(serverAddr, handler)
 }
+
+// { "fileID": "cbbfc3d7-6618-4df4-b734-86ddde3df0ba"} - XLS FILE
+// { "fileID": "08899cef-8858-4d6a-85c1-1b5757d86d34" } - PDF FILE
+// { "fileID": "2733d5fe-5810-44d6-9674-bd6eb30c5a38" } - PDF FILE
+// { "fileID": "2497c116-bfb5-49fc-8bb2-f0fefa970a5d" } - IMAGE FILE JPG

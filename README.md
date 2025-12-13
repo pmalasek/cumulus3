@@ -60,9 +60,10 @@ Run the logging demo script:
 
 This script demonstrates different log levels (DEBUG, INFO, ERROR) and formats (text, JSON).
 
-Detailed documentation: 
-- [DEPLOYMENT.md](DEPLOYMENT.md) - Production deployment guide
-- [docs/LOGGING.md](docs/LOGGING.md) - Comprehensive logging documentation
+Detailed documentation
+
+* [DEPLOYMENT.md](DEPLOYMENT.md) - Production deployment guide
+* [docs/LOGGING.md](docs/LOGGING.md) - Comprehensive logging documentation
 
 ## 🛠️ VývoDevelopmentj
 
