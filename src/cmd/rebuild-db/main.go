@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/pmalasek/cumulus3/src/internal/storage"
 	"github.com/pmalasek/cumulus3/src/internal/utils"
 )
@@ -20,6 +23,7 @@ type BlobInfo struct {
 	VolumeID       int64
 	Offset         int64
 	SizeCompressed int64
+	SizeRaw        int64
 	CompAlg        uint8
 	Hash           string
 }
@@ -70,15 +74,31 @@ func main() {
 
 	// Read files metadata
 	fmt.Println("\n📂 Reading files metadata...")
-	files, err := readFilesMetadata(filepath.Join(filepath.Dir(*dataDir), "database", "files_metadata.bin"))
+	allFiles, err := readFilesMetadata(filepath.Join(filepath.Dir(*dataDir), "database", "files_metadata.bin"))
 	if err != nil {
-		files, err = readFilesMetadata(filepath.Join(*dataDir, "files_metadata.bin"))
+		allFiles, err = readFilesMetadata(filepath.Join(*dataDir, "files_metadata.bin"))
 		if err != nil {
 			log.Printf("⚠️  Warning: Failed to read files_metadata.bin: %v", err)
-			files = []FileInfo{}
+			allFiles = []FileInfo{}
 		}
 	}
-	fmt.Printf("✅ Found %d file records\n", len(files))
+
+	// Deduplicate files: Keep only the LATEST record for each blob_id+name combination
+	// files_metadata.bin is append-only, so later records represent re-uploads
+	fileMap := make(map[string]FileInfo) // key: "blob_id:name"
+	for _, file := range allFiles {
+		key := fmt.Sprintf("%d:%s", file.BlobID, file.Name)
+		// Always overwrite with latest record (last one wins)
+		fileMap[key] = file
+	}
+
+	// Convert map back to slice
+	files := make([]FileInfo, 0, len(fileMap))
+	for _, file := range fileMap {
+		files = append(files, file)
+	}
+
+	fmt.Printf("✅ Found %d file records (%d total, %d after deduplication)\n", len(files), len(allFiles), len(files))
 
 	// Populate database
 	fmt.Println("\n💾 Populating database...")
@@ -86,6 +106,7 @@ func main() {
 	// Insert blobs
 	fmt.Println("  → Inserting blobs...")
 	blobCount := 0
+	skippedDuplicates := 0
 	for _, blob := range blobs {
 		mimeType, category, subtype := detectBlobType(*dataDir, blob)
 
@@ -97,6 +118,11 @@ func main() {
 
 		err = meta.CreateBlobWithID(blob.ID, blob.Hash)
 		if err != nil {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				// Blob already exists (duplicate in .meta files), skip it
+				skippedDuplicates++
+				continue
+			}
 			log.Printf("Warning: Failed to create blob %d: %v", blob.ID, err)
 			continue
 		}
@@ -108,7 +134,7 @@ func main() {
 			compAlg = "zstd"
 		}
 
-		err = meta.UpdateBlobLocation(blob.ID, blob.VolumeID, blob.Offset, 0, blob.SizeCompressed, compAlg, fileTypeID)
+		err = meta.UpdateBlobLocation(blob.ID, blob.VolumeID, blob.Offset, blob.SizeRaw, blob.SizeCompressed, compAlg, fileTypeID)
 		if err != nil {
 			log.Printf("Warning: Failed to update blob location %d: %v", blob.ID, err)
 			continue
@@ -119,12 +145,28 @@ func main() {
 			fmt.Printf("    Progress: %d/%d blobs\r", blobCount, len(blobs))
 		}
 	}
-	fmt.Printf("  ✅ Inserted %d blobs                    \n", blobCount)
+	fmt.Printf("  ✅ Inserted %d blobs", blobCount)
+	if skippedDuplicates > 0 {
+		fmt.Printf(" (skipped %d duplicates)", skippedDuplicates)
+	}
+	fmt.Println("                    ")
+
+	// Build map of existing blob IDs
+	existingBlobs := make(map[int64]bool)
+	for _, blob := range blobs {
+		existingBlobs[blob.ID] = true
+	}
 
 	// Insert files
 	fmt.Println("  → Inserting files...")
 	fileCount := 0
+	skippedOrphaned := 0
 	for _, file := range files {
+		// Skip files referencing non-existent blobs (orphaned after deletions/compaction)
+		if !existingBlobs[file.BlobID] {
+			skippedOrphaned++
+			continue
+		}
 		var expiresAt *time.Time
 		if file.ExpiresAt != nil {
 			t := time.Unix(*file.ExpiresAt, 0)
@@ -147,10 +189,14 @@ func main() {
 
 		fileCount++
 		if fileCount%100 == 0 {
-			fmt.Printf("    Progress: %d/%d files\r", fileCount, len(files))
+			fmt.Printf("    Progress: %d/%d files\r", fileCount, len(files)-skippedOrphaned)
 		}
 	}
-	fmt.Printf("  ✅ Inserted %d files                    \n", fileCount)
+	fmt.Printf("  ✅ Inserted %d files", fileCount)
+	if skippedOrphaned > 0 {
+		fmt.Printf(" (skipped %d orphaned)", skippedOrphaned)
+	}
+	fmt.Println("                    ")
 
 	// Update volumes table
 	fmt.Println("  → Updating volume sizes...")
@@ -166,10 +212,31 @@ func main() {
 	fmt.Printf("  ✅ Updated %d volumes\n", len(volumeSizes))
 
 	fmt.Println("\n🎉 Database rebuild complete!")
+
+	// Summary
+	fmt.Println("\n📊 Summary:")
+	fmt.Printf("   Physical blobs found: %d\n", len(blobs))
+	fmt.Printf("   → Inserted into DB: %d\n", blobCount)
+	if skippedDuplicates > 0 {
+		fmt.Printf("   → Skipped (duplicates): %d\n", skippedDuplicates)
+	}
+
+	fmt.Printf("\n   File records in log: %d\n", len(files))
+	fmt.Printf("   → Inserted into DB: %d\n", fileCount)
+	if skippedOrphaned > 0 {
+		fmt.Printf("   → Skipped (orphaned): %d\n", skippedOrphaned)
+	}
+
+	fmt.Printf("\n   Volumes updated: %d\n", len(volumeSizes))
+
+	// Verify final state
+	var actualBlobs, actualFiles int64
+	meta.GetDB().QueryRow("SELECT COUNT(*) FROM blobs").Scan(&actualBlobs)
+	meta.GetDB().QueryRow("SELECT COUNT(*) FROM files").Scan(&actualFiles)
+	fmt.Printf("\n✅ Final database state:\n")
+	fmt.Printf("   Blobs: %d\n", actualBlobs)
+	fmt.Printf("   Files: %d\n", actualFiles)
 	fmt.Printf("   Database: %s\n", *dbPath)
-	fmt.Printf("   Blobs: %d\n", blobCount)
-	fmt.Printf("   Files: %d\n", fileCount)
-	fmt.Printf("   Volumes: %d\n", len(volumeSizes))
 }
 
 func scanVolumes(dir string) ([]BlobInfo, map[int64]int64, error) {
@@ -193,7 +260,7 @@ func scanVolumes(dir string) ([]BlobInfo, map[int64]int64, error) {
 
 		if _, err := os.Stat(metaPath); err == nil {
 			fmt.Printf("  → Reading %s (using .meta)\n", baseName)
-			volumeBlobs, err := readMetaFile(metaPath, volumeID)
+			volumeBlobs, err := readMetaFile(metaPath, file, volumeID)
 			if err == nil {
 				blobs = append(blobs, volumeBlobs...)
 				totalSize := int64(0)
@@ -224,7 +291,7 @@ func scanVolumes(dir string) ([]BlobInfo, map[int64]int64, error) {
 	return blobs, volumeSizes, nil
 }
 
-func readMetaFile(metaPath string, volumeID int64) ([]BlobInfo, error) {
+func readMetaFile(metaPath, datPath string, volumeID int64) ([]BlobInfo, error) {
 	f, err := os.Open(metaPath)
 	if err != nil {
 		return nil, err
@@ -250,11 +317,19 @@ func readMetaFile(metaPath string, volumeID int64) ([]BlobInfo, error) {
 
 		hash := fmt.Sprintf("blob_%d", blobID)
 
+		// Read blob data to calculate raw size
+		rawSize, err := calculateRawSize(datPath, offset, size, compAlg)
+		if err != nil {
+			log.Printf("    Warning: Failed to calculate raw size for blob %d: %v", blobID, err)
+			rawSize = 0
+		}
+
 		blobs = append(blobs, BlobInfo{
 			ID:             blobID,
 			VolumeID:       volumeID,
 			Offset:         offset,
 			SizeCompressed: size,
+			SizeRaw:        rawSize,
 			CompAlg:        compAlg,
 			Hash:           hash,
 		})
@@ -294,11 +369,19 @@ func scanDatFile(file string, volumeID int64) ([]BlobInfo, error) {
 
 		hash := fmt.Sprintf("blob_%d", blobID)
 
+		// Read blob data to calculate raw size
+		rawSize, err := calculateRawSize(file, offset, size, compAlg)
+		if err != nil {
+			log.Printf("    Warning: Failed to calculate raw size for blob %d: %v", blobID, err)
+			rawSize = 0
+		}
+
 		blobs = append(blobs, BlobInfo{
 			ID:             blobID,
 			VolumeID:       volumeID,
 			Offset:         offset,
 			SizeCompressed: size,
+			SizeRaw:        rawSize,
 			CompAlg:        compAlg,
 			Hash:           hash,
 		})
@@ -309,6 +392,75 @@ func scanDatFile(file string, volumeID int64) ([]BlobInfo, error) {
 	}
 
 	return blobs, nil
+}
+
+func calculateRawSize(datPath string, offset, sizeCompressed int64, compAlg uint8) (int64, error) {
+	f, err := os.Open(datPath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	// Seek to data (skip header)
+	if _, err := f.Seek(offset+int64(storage.HeaderSize), io.SeekStart); err != nil {
+		return 0, err
+	}
+
+	// Read compressed data
+	compressedData := make([]byte, sizeCompressed)
+	if _, err := io.ReadFull(f, compressedData); err != nil {
+		return 0, err
+	}
+
+	// Decompress based on algorithm
+	switch compAlg {
+	case 0: // none
+		return sizeCompressed, nil
+	case 1: // gzip
+		gr, err := gzip.NewReader(bytes.NewReader(compressedData))
+		if err != nil {
+			return 0, err
+		}
+		defer gr.Close()
+
+		// Count bytes without storing decompressed data
+		rawSize := int64(0)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := gr.Read(buf)
+			rawSize += int64(n)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return 0, err
+			}
+		}
+		return rawSize, nil
+	case 2: // zstd
+		zr, err := zstd.NewReader(bytes.NewReader(compressedData))
+		if err != nil {
+			return 0, err
+		}
+		defer zr.Close()
+
+		// Count bytes without storing decompressed data
+		rawSize := int64(0)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := zr.Read(buf)
+			rawSize += int64(n)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return 0, err
+			}
+		}
+		return rawSize, nil
+	default:
+		return 0, fmt.Errorf("unknown compression algorithm: %d", compAlg)
+	}
 }
 
 func readFilesMetadata(path string) ([]FileInfo, error) {
