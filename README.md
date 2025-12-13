@@ -107,5 +107,37 @@ export PATH=$PATH:$(go env GOPATH)/bin to .bashrc
 mkdir -p build && \
 go build -o build/migrate_cumulus ./src/cmd/migrate_cumulus && \
 go build -o build/recovery-tool ./src/cmd/recovery-tool && \
+go build -o build/compact-tool ./src/cmd/compact-tool && \
 go build -o build/volume-server ./src/cmd/volume-server
 ```
+
+## Maintenance Tools
+
+### Compact Tool
+
+Cumulus3 includes a maintenance tool for database and volume compaction:
+
+```bash
+# List all volumes and their fragmentation
+compact-tool volumes list
+
+# Compact specific volume
+compact-tool volumes compact <id>
+
+# Compact all volumes with fragmentation >= 20%
+compact-tool volumes compact-all --threshold 20
+
+# Database VACUUM (requires stopping the server)
+compact-tool db vacuum
+```
+
+**Docker usage:**
+```bash
+# List volumes
+docker exec cumulus3-volume-server-1 /app/compact-tool volumes list
+
+# Compact fragmented volumes
+docker exec cumulus3-volume-server-1 /app/compact-tool volumes compact-all --threshold 30
+```
+
+See [DEPLOYMENT.md](DEPLOYMENT.md#maintenance) for detailed maintenance procedures.

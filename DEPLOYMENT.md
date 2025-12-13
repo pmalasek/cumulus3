@@ -323,7 +323,8 @@ Přístup k jednotlivým službám:
 | **Centrální Prometheus** | Váš Prometheus server | Přidejte Cumulus3 do scrape_configs |
 | **Centrální Grafana** | Váš Grafana server | Vytvořte dashboard |
 
-> ⚠️ **Bezpečnost**: 
+> ⚠️ **Bezpečnost**
+>
 > - Port 8800 je dostupný pouze z interní sítě (firewall)
 > - Pro veřejný přístup používejte centrální Nginx s HTTPS
 > - Metriky jsou dostupné bez autentizace - omezit firewallem
@@ -557,16 +558,138 @@ docker compose up -d
 2. **Kontrola logů** - týdně
 3. **Aktualizace** - měsíčně
 4. **Čištění starých dat** - dle potřeby
+5. **Kompaktace volumes** - při fragmentaci >30%
 
-### Kompaktace databáze
+### Compact Tool - Moderní nástroj pro údržbu
+
+Cumulus3 obsahuje vestavěný nástroj `compact-tool` pro údržbu databáze i volume souborů.
+
+#### Přehled volumes a fragmentace
 
 ```bash
-# Kompaktace (uvolní nevyužité místo)
+# Zobrazení všech volumes a jejich fragmentace
+docker exec cumulus3-volume-server-1 /app/compact-tool volumes list
+```
+
+Výstup:
+```
+Volume Status:
+─────────────────────────────────────────────────────────
+ID       Total Size      Deleted Size    Used Size       Fragmentation Status  
+─────────────────────────────────────────────────────────
+1        68.5 MB         5.6 MB          62.8 MB         8.2%         OK      
+2        69.1 MB         24.8 MB         44.3 MB         35.9%        OK      
+3        69.9 MB         43.3 MB         26.6 MB         61.9%        OK      
+```
+
+#### Kompaktace konkrétního volume
+
+```bash
+# Kompaktace volume 3 (s vysokou fragmentací)
+docker exec cumulus3-volume-server-1 /app/compact-tool volumes compact 3
+```
+
+Výstup:
+```
+Starting compaction of volume 3...
+Before: Total=69.9 MB, Deleted=43.3 MB, Fragmentation=61.9%
+After:  Total=26.6 MB, Deleted=0 B, Fragmentation=0.0%
+✓ Space saved: 43.3 MB
+✓ Compaction completed successfully
+```
+
+**Výhody:**
+- ⚡ **Běží za provozu** - ostatní volumes jsou přístupné
+- 🔒 **Per-volume locking** - bezpečné pro produkci
+- 📊 **Detailní reporty** - před/po statistiky
+
+#### Automatická kompaktace všech fragmentovaných volumes
+
+```bash
+# Kompaktace všech volumes s fragmentací >= 30%
+docker exec cumulus3-volume-server-1 /app/compact-tool volumes compact-all --threshold 30
+```
+
+Výstup:
+```
+Found 3 volume(s) with fragmentation >= 30.0%
+
+[1/3] Compacting volume 2 (fragmentation: 35.9%)...
+  ✓ Saved: 24.8 MB
+
+[2/3] Compacting volume 3 (fragmentation: 61.9%)...
+  ✓ Saved: 43.3 MB
+
+[3/3] Compacting volume 7 (fragmentation: 39.4%)...
+  ✓ Saved: 27.4 MB
+
+─────────────────────────────────────────────────────────
+Summary: 3 succeeded, 0 failed
+Total space saved: 95.5 MB
+─────────────────────────────────────────────────────────
+```
+
+**Doporučení:**
+- Spouštějte pravidelně (např. týdně) přes cron
+- Threshold 30% je vhodný kompromis
+- Kompaktace se provede během provozu bez downtime
+
+#### Kompaktace SQLite databáze (VACUUM)
+
+```bash
+# ZASTAVENÍ serveru je povinné!
+docker compose stop cumulus3
+
+# Spuštění VACUUM
+docker compose run --rm cumulus3 /app/compact-tool db vacuum
+
+# Zpětné spuštění serveru
+docker compose start cumulus3
+```
+
+Výstup:
+```
+⚠️  WARNING: Database VACUUM requires exclusive access!
+⚠️  Please ensure the Cumulus3 server is stopped before proceeding.
+
+Continue? (yes/no): yes
+
+Opening database...
+Database size before VACUUM: 245.3 MB
+Starting VACUUM (this may take several minutes)...
+
+✓ VACUUM completed successfully
+Database size after VACUUM: 198.7 MB
+Space saved: 46.6 MB (19.0%)
+```
+
+**Důležité:**
+- 🛑 **Vyžaduje zastavení serveru** (downtime)
+- 💾 **Potřebuje 2x tolik místa** jako velikost DB
+- ⏰ **Může trvat několik minut** u velkých databází
+- 📅 **Doporučeno 1x měsíčně** mimo špičku
+
+#### Automatizace údržby přes cron
+
+```bash
+# Editace crontabu
+crontab -e
+
+# Přidání pravidelné kompaktace (každou neděli ve 2:00)
+0 2 * * 0 docker exec cumulus3-volume-server-1 /app/compact-tool volumes compact-all --threshold 30 >> /var/log/cumulus3-compact.log 2>&1
+```
+
+### Legacy metoda - Přímá kompaktace databáze (zastaralé)
+
+```bash
+# Kompaktace (uvolní nevyužité místo) - zastaralá metoda
 docker exec cumulus3 sqlite3 /app/data/database/cumulus3.db "VACUUM;"
 
 # Analýza a optimalizace
 docker exec cumulus3 sqlite3 /app/data/database/cumulus3.db "ANALYZE;"
 ```
+
+**Poznámka:** Doporučujeme používat nový `compact-tool` namísto přímého volání sqlite3.
 
 ### Monitoring diskového prostoru
 
