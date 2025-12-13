@@ -215,6 +215,18 @@ func (m *MetadataSQL) CreateBlob(hash string) (int64, error) {
 	return res.LastInsertId()
 }
 
+// CreateBlobWithID creates a blob with a specific ID (for database rebuild)
+func (m *MetadataSQL) CreateBlobWithID(id int64, hash string) error {
+	query := `INSERT INTO blobs (id, hash) VALUES (?, ?)`
+	_, err := m.db.Exec(query, id, hash)
+	return err
+}
+
+// GetDB returns the underlying database connection (for advanced operations)
+func (m *MetadataSQL) GetDB() *sql.DB {
+	return m.db
+}
+
 func (m *MetadataSQL) GetFile(id string) (File, error) {
 	var f File
 	query := `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags FROM files WHERE id = ?`

@@ -27,6 +27,7 @@ RUN go install github.com/swaggo/swag/cmd/swag@latest && \
 RUN mkdir -p build && \
     CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/migrate_cumulus ./src/cmd/migrate_cumulus && \
     CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/recovery-tool ./src/cmd/recovery-tool && \
+    CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/rebuild-tool ./src/cmd/rebuild-db && \
     CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/compact-tool ./src/cmd/compact-tool && \
     CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/volume-server ./src/cmd/volume-server
 
