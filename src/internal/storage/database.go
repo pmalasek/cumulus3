@@ -292,3 +292,53 @@ func (m *MetadataSQL) GetFileByOldID(oldID int64) (File, error) {
 	}
 	return f, nil
 }
+
+// FindFileByBlobAndName finds an existing file with the same blob_id, filename, old_cumulus_id, and expiresAt
+func (m *MetadataSQL) FindFileByBlobAndName(blobID int64, filename string, oldCumulusID *int64, expiresAt *time.Time) (*File, error) {
+	var f File
+	var query string
+	var err error
+
+	// Build query based on oldCumulusID and expiresAt combinations
+	if oldCumulusID == nil && expiresAt == nil {
+		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
+		         FROM files 
+		         WHERE blob_id = ? AND name = ? AND old_cumulus_id IS NULL AND expires_at IS NULL
+		         LIMIT 1`
+		err = m.db.QueryRow(query, blobID, filename).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
+	} else if oldCumulusID == nil && expiresAt != nil {
+		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
+		         FROM files 
+		         WHERE blob_id = ? AND name = ? AND old_cumulus_id IS NULL AND expires_at = ?
+		         LIMIT 1`
+		err = m.db.QueryRow(query, blobID, filename, *expiresAt).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
+	} else if oldCumulusID != nil && expiresAt == nil {
+		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
+		         FROM files 
+		         WHERE blob_id = ? AND name = ? AND old_cumulus_id = ? AND expires_at IS NULL
+		         LIMIT 1`
+		err = m.db.QueryRow(query, blobID, filename, *oldCumulusID).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
+	} else {
+		// Both oldCumulusID and expiresAt are set
+		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
+		         FROM files 
+		         WHERE blob_id = ? AND name = ? AND old_cumulus_id = ? AND expires_at = ?
+		         LIMIT 1`
+		err = m.db.QueryRow(query, blobID, filename, *oldCumulusID, *expiresAt).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
+	}
+
+	if err == sql.ErrNoRows {
+		return nil, nil // Not found
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// UpdateFileTags updates the tags for a file
+func (m *MetadataSQL) UpdateFileTags(fileID string, tags string) error {
+	query := `UPDATE files SET tags = ? WHERE id = ?`
+	_, err := m.db.Exec(query, tags, fileID)
+	return err
+}

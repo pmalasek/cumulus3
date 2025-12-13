@@ -483,6 +483,32 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 
 // saveFile creates a new file record in the metadata database linked to the blob
 func (s *FileService) saveFile(filename string, blobID int64, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, error) {
+	// Check if file with same blob_id, filename, old_cumulus_id, and expiresAt already exists
+	existingFile, err := s.MetaStore.FindFileByBlobAndName(blobID, filename, oldCumulusID, expiresAt)
+	if err != nil {
+		return "", fmt.Errorf("error checking existing file: %w", err)
+	}
+
+	// If exact match exists, merge tags if needed
+	if existingFile != nil {
+		// Merge tags
+		if tags != "" && tags != existingFile.Tags {
+			mergedTags := mergeTags(existingFile.Tags, tags)
+			if mergedTags != existingFile.Tags {
+				if err := s.MetaStore.UpdateFileTags(existingFile.ID, mergedTags); err != nil {
+					utils.Warn("SERVICE", " Failed to update tags for file_id=%s: %v", existingFile.ID, err)
+				} else {
+					utils.Info("SERVICE", " Tags merged for file_id=%s: old_tags=%s, new_tags=%s, merged=%s",
+						existingFile.ID, existingFile.Tags, tags, mergedTags)
+				}
+			}
+		}
+		utils.Info("SERVICE", " Duplicate file detected: returning existing file_id=%s, filename=%s, blob_id=%d",
+			existingFile.ID, filename, blobID)
+		return existingFile.ID, nil
+	}
+
+	// No duplicate found, create new file record
 	fileID := uuid.New().String()
 	fileMeta := storage.File{
 		ID:           fileID,
@@ -506,7 +532,42 @@ func (s *FileService) saveFile(filename string, blobID int64, oldCumulusID *int6
 		}
 	}
 
+	utils.Info("SERVICE", " New file created: file_id=%s, filename=%s, blob_id=%d", fileID, filename, blobID)
 	return fileID, nil
+}
+
+// mergeTags merges two tag strings, removing duplicates
+func mergeTags(existingTags, newTags string) string {
+	if existingTags == "" {
+		return newTags
+	}
+	if newTags == "" {
+		return existingTags
+	}
+
+	// Parse existing tags
+	tagSet := make(map[string]bool)
+	for _, tag := range strings.Split(existingTags, ",") {
+		tag = strings.TrimSpace(tag)
+		if tag != "" {
+			tagSet[tag] = true
+		}
+	}
+
+	// Add new tags
+	for _, tag := range strings.Split(newTags, ",") {
+		tag = strings.TrimSpace(tag)
+		if tag != "" {
+			tagSet[tag] = true
+		}
+	}
+
+	// Convert back to comma-separated string
+	var tags []string
+	for tag := range tagSet {
+		tags = append(tags, tag)
+	}
+	return strings.Join(tags, ",")
 }
 
 type FileInfo struct {

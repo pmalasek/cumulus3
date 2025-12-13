@@ -213,3 +213,6 @@ func main() {
 // { "fileID": "08899cef-8858-4d6a-85c1-1b5757d86d34" } - PDF FILE
 // { "fileID": "2733d5fe-5810-44d6-9674-bd6eb30c5a38" } - PDF FILE
 // { "fileID": "2497c116-bfb5-49fc-8bb2-f0fefa970a5d" } - IMAGE FILE JPG
+// { "fileID": "06305333-940d-43a3-a7c7-97198d55d257" } - BINARY FILE - TEMP
+// { "fileID": "03404f16-0faa-49f0-ba09-b12426d93710" } - KESS3 FILE
+// { "fileID": "3447c37d-9eee-454c-a239-200c532fad07" } - KESS3 DEC FILE
