@@ -462,7 +462,8 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 		compAlgCode = 2
 	}
 
-	volID, offset, err := s.Store.WriteBlob(blobID, data, compAlgCode)
+	// Use WriteBlobWithMetadata to check DB values for free space
+	volID, offset, actualSize, err := s.Store.WriteBlobWithMetadata(blobID, data, compAlgCode, s.MetaStore)
 	if err != nil {
 		return 0, false, fmt.Errorf("storage error: %w", err)
 	}
@@ -473,7 +474,10 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 		return 0, false, fmt.Errorf("metadata error: %w", err)
 	}
 
-	err = s.MetaStore.UpdateBlobLocation(blobID, volID, offset, sizeRaw, sizeCompressed, alg, fileTypeID)
+	// Use actualSize from WriteBlobWithMetadata, which includes header+data+footer
+	// This is the actual disk space used and must match what's written to volumes table
+	sizeCompressedWithHeaders := actualSize - int64(storage.HeaderSize) - int64(storage.FooterSize)
+	err = s.MetaStore.UpdateBlobLocation(blobID, volID, offset, sizeRaw, sizeCompressedWithHeaders, alg, fileTypeID)
 	if err != nil {
 		return 0, false, fmt.Errorf("database error updating blob: %w", err)
 	}

@@ -261,15 +261,8 @@ func (m *MetadataSQL) UpdateBlobLocation(id int64, volumeID, offset, sizeRaw, si
 		return err
 	}
 
-	// Update volume size
-	totalSize := int64(HeaderSize) + sizeCompressed + int64(FooterSize)
-	volQuery := `
-	INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, ?, 0)
-	ON CONFLICT(id) DO UPDATE SET size_total = size_total + ?
-	`
-	if _, err := tx.Exec(volQuery, volumeID, totalSize, totalSize); err != nil {
-		return err
-	}
+	// Note: volumes table is now updated in WriteBlobWithMetadata (inside volume lock)
+	// to ensure atomic check-and-update and prevent race conditions
 
 	return tx.Commit()
 }

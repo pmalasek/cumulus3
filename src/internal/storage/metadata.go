@@ -20,12 +20,30 @@ ON CONFLICT(id) DO UPDATE SET size_deleted = size_deleted + ?
 }
 
 func (m *MetadataSQL) GetVolumesToCompact(threshold float64) ([]VolumeInfo, error) {
-	query := `
+	var query string
+	var rows *sql.Rows
+	var err error
+
+	if threshold <= 0 {
+		// threshold=0 means get all volumes
+		query = `
+SELECT id, size_total, size_deleted 
+FROM volumes 
+WHERE size_total > 0
+ORDER BY id`
+		rows, err = m.db.Query(query)
+	} else {
+		// Convert threshold from percentage (5.0 = 5%) to ratio (0.05)
+		thresholdRatio := threshold / 100.0
+
+		query = `
 SELECT id, size_total, size_deleted 
 FROM volumes 
 WHERE size_total > 0 AND CAST(size_deleted AS FLOAT) / CAST(size_total AS FLOAT) > ?
-`
-	rows, err := m.db.Query(query, threshold)
+ORDER BY id`
+		rows, err = m.db.Query(query, thresholdRatio)
+	}
+
 	if err != nil {
 		return nil, err
 	}

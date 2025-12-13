@@ -18,7 +18,7 @@ func (s *Store) CompactVolume(volumeID int64, meta *MetadataSQL) error {
 		defer s.mu.Unlock()
 	}
 
-	// Lock the volume
+	// Lock the volume exclusively (write lock) - blocks all reads and writes
 	lock := s.getVolumeLock(volumeID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -148,6 +148,31 @@ func (s *Store) CompactVolume(volumeID int64, meta *MetadataSQL) error {
 		// Try to restore old file (best effort)
 		os.Rename(fullPath, compactPath)
 		return fmt.Errorf("failed to commit transaction after file swap: %w", err)
+	}
+
+	// 7. Truncate file to actual size to free disk space
+	// This removes the "holes" left by deleted data
+	if err := os.Truncate(fullPath, currentOffset); err != nil {
+		// Non-critical error, just log it
+		// File is still valid, just larger than needed
+		return fmt.Errorf("warning: failed to truncate volume file: %w", err)
+	}
+
+	// 8. Recalculate current volume if this was a current or newer volume
+	// This allows the system to switch back to this volume if it now has space
+	if isCurrent {
+		// We already hold s.mu.Lock, use no-lock version
+		s.recalculateCurrentVolumeNoLock()
+	} else if volumeID >= s.CurrentVolumeID {
+		// Need to acquire lock for recalculation
+		s.RecalculateCurrentVolume()
+	}
+
+	// 9. Regenerate .meta file with updated offsets
+	if err := s.regenerateMetaFile(volumeID, meta); err != nil {
+		// Non-critical error, just log warning
+		// The .meta file is used for fast recovery, but database is the source of truth
+		return fmt.Errorf("warning: failed to regenerate .meta file: %w", err)
 	}
 
 	return nil

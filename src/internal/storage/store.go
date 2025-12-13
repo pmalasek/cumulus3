@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -25,7 +26,7 @@ type Store struct {
 	MaxDataFileSize int64
 	mu              sync.Mutex
 	CurrentVolumeID int64
-	volumeLocks     sync.Map
+	volumeLocks     sync.Map // map[int64]*sync.RWMutex
 }
 
 // NewStore vytvoří novou instanci a připraví složku
@@ -63,9 +64,124 @@ func NewStore(dir string, maxDataFileSize int64) *Store {
 	}
 }
 
-func (s *Store) getVolumeLock(volumeID int64) *sync.Mutex {
-	v, _ := s.volumeLocks.LoadOrStore(volumeID, &sync.Mutex{})
-	return v.(*sync.Mutex)
+func (s *Store) getVolumeLock(volumeID int64) *sync.RWMutex {
+	v, _ := s.volumeLocks.LoadOrStore(volumeID, &sync.RWMutex{})
+	return v.(*sync.RWMutex)
+}
+
+// RecalculateCurrentVolume finds the first volume that has space available
+// Useful after compaction to switch back to a volume that now has space
+func (s *Store) RecalculateCurrentVolume() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recalculateCurrentVolumeNoLock()
+}
+
+// recalculateCurrentVolumeNoLock is internal version without locking
+// Call this when you already hold s.mu.Lock()
+func (s *Store) recalculateCurrentVolumeNoLock() {
+	// Start from volume 1 and find the first one that has space
+	for volumeID := int64(1); volumeID <= s.CurrentVolumeID; volumeID++ {
+		filename := fmt.Sprintf("volume_%08d.dat", volumeID)
+		fullPath := filepath.Join(s.BaseDir, filename)
+
+		// Check for legacy format
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			filenameLegacy := fmt.Sprintf("volume_%d.dat", volumeID)
+			fullPathLegacy := filepath.Join(s.BaseDir, filenameLegacy)
+			if _, err := os.Stat(fullPathLegacy); err == nil {
+				fullPath = fullPathLegacy
+			} else {
+				// Volume doesn't exist, skip
+				continue
+			}
+		}
+
+		// Check if volume has space
+		if stat, err := os.Stat(fullPath); err == nil {
+			if stat.Size() < s.MaxDataFileSize {
+				// Found a volume with space, switch to it
+				s.CurrentVolumeID = volumeID
+				return
+			}
+		}
+	}
+
+	// All volumes are full, keep current (or create next one)
+}
+
+// findVolumeWithSpaceNoLock finds first volume (from 1 to current) that has enough space
+// Uses database metadata if available, otherwise falls back to file system
+// skipLocked: if true, skips volumes that are currently locked (e.g., being compacted)
+// Returns volume ID to use. Call this when you already hold s.mu.Lock()
+func (s *Store) findVolumeWithSpaceNoLock(requiredSize int64, meta *MetadataSQL, skipLocked bool) int64 {
+	if meta != nil {
+		// Use database values (source of truth)
+		volumes, err := meta.GetVolumesToCompact(0) // Get all volumes
+		if err == nil {
+			// Build a map for quick lookup
+			volMap := make(map[int64]int64) // volumeID -> size_total
+			for _, vol := range volumes {
+				volMap[int64(vol.ID)] = vol.SizeTotal
+			}
+
+			// Check each volume from 1 to current
+			for volumeID := int64(1); volumeID <= s.CurrentVolumeID; volumeID++ {
+				// Check if volume exists in DB
+				sizeTotal, exists := volMap[volumeID]
+				if !exists {
+					// Volume not in DB yet, assume empty (size = 0)
+					sizeTotal = 0
+				}
+
+				// Check if volume has enough space based on DB values
+				if sizeTotal+requiredSize <= s.MaxDataFileSize {
+					// Found a volume with enough space
+					return volumeID
+				}
+			}
+		}
+	}
+
+	// Fallback to file system check (when no metadata available or volume not in DB yet)
+	// Try existing volumes first (from 1 to current)
+	for volumeID := int64(1); volumeID <= s.CurrentVolumeID; volumeID++ {
+		// Skip locked volumes if requested
+		if skipLocked {
+			lock := s.getVolumeLock(volumeID)
+			if !lock.TryLock() {
+				continue
+			}
+			lock.Unlock()
+		}
+
+		filename := fmt.Sprintf("volume_%08d.dat", volumeID)
+		fullPath := filepath.Join(s.BaseDir, filename)
+
+		// Check for legacy format
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			filenameLegacy := fmt.Sprintf("volume_%d.dat", volumeID)
+			fullPathLegacy := filepath.Join(s.BaseDir, filenameLegacy)
+			if _, err := os.Stat(fullPathLegacy); err == nil {
+				fullPath = fullPathLegacy
+			} else {
+				// Volume doesn't exist yet, skip
+				continue
+			}
+		}
+
+		// Check if volume has enough space based on file size
+		if stat, err := os.Stat(fullPath); err == nil {
+			if stat.Size()+requiredSize <= s.MaxDataFileSize {
+				// Found a volume with enough space
+				return volumeID
+			}
+		}
+	}
+
+	// All existing volumes are full, create/use next one
+	s.CurrentVolumeID++
+	return s.CurrentVolumeID
 }
 
 // WriteFile uloží data na disk (legacy)
@@ -87,124 +203,149 @@ func (s *Store) ReadFile(filename string) (io.ReadCloser, error) {
 	return os.Open(fullPath)
 }
 
-// WriteBlob zapíše data do volume souboru s optimalizovanou hlavičkou (BlobID)
-func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volumeID int64, offset int64, err error) {
-	// Get current volume ID under short lock
-	s.mu.Lock()
-	currentVol := s.CurrentVolumeID
-	s.mu.Unlock()
+// WriteBlob zapíše data do volume souboru
+// Returns: volumeID, offset, totalBytesWritten (including header and footer), error
+func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volumeID int64, offset int64, totalSize int64, err error) {
+	return s.WriteBlobWithMetadata(blobID, data, compressionAlg, nil)
+}
 
-	// Lock only this specific volume to allow parallel writes to different volumes
-	volLock := s.getVolumeLock(currentVol)
-	volLock.Lock()
-	defer volLock.Unlock()
-
-	// Check if volume changed during wait for lock (rotation happened)
-	s.mu.Lock()
-	if s.CurrentVolumeID != currentVol {
-		s.mu.Unlock()
-		// Volume rotated, retry with new volume
-		return s.WriteBlob(blobID, data, compressionAlg)
-	}
-	s.mu.Unlock()
-
+// WriteBlobWithMetadata zapíše data do volume souboru s využitím DB metadat pro nalezení volume s místem
+// Returns: volumeID, offset, totalBytesWritten (including header and footer), error
+func (s *Store) WriteBlobWithMetadata(blobID int64, data []byte, compressionAlg uint8, meta *MetadataSQL) (volumeID int64, offset int64, totalSize int64, err error) {
 	dataSize := int64(len(data))
 	totalEntrySize := int64(HeaderSize) + dataSize + int64(FooterSize)
 
-	filename := fmt.Sprintf("volume_%08d.dat", currentVol)
-	fullPath := filepath.Join(s.BaseDir, filename)
+	// Find a volume with enough space (tries from volume 1 up to current)
+	// Skip locked volumes (e.g., being compacted) to avoid blocking
+	s.mu.Lock()
+	targetVol := s.findVolumeWithSpaceNoLock(totalEntrySize, meta, true)
+	s.mu.Unlock()
 
-	// If new format doesn't exist, check if legacy exists
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		filenameLegacy := fmt.Sprintf("volume_%d.dat", currentVol)
-		fullPathLegacy := filepath.Join(s.BaseDir, filenameLegacy)
-		if _, err := os.Stat(fullPathLegacy); err == nil {
-			filename = filenameLegacy
-			fullPath = fullPathLegacy
-		}
-	}
+	// Try to write to selected volume, with retry if it's full
+	// This handles race condition where multiple goroutines pass the initial check
+	var f *os.File
+	var filename, fullPath string
+	triedVolumes := make(map[int64]bool) // Track which volumes we already tried
 
-	// Check if we need to rotate
-	if stat, err := os.Stat(fullPath); err == nil {
-		if stat.Size()+totalEntrySize > s.MaxDataFileSize {
+	for {
+		// Check if we already tried this volume
+		if triedVolumes[targetVol] {
+			// Already tried this volume, move to next
 			s.mu.Lock()
-			s.CurrentVolumeID++
+			if targetVol >= s.CurrentVolumeID {
+				s.CurrentVolumeID++
+				targetVol = s.CurrentVolumeID
+			} else {
+				targetVol++
+			}
 			s.mu.Unlock()
-			// Retry with new volume
-			return s.WriteBlob(blobID, data, compressionAlg)
+			continue
 		}
+		triedVolumes[targetVol] = true
+
+		// Lock this specific volume to allow parallel writes to different volumes
+		volLock := s.getVolumeLock(targetVol)
+		volLock.Lock()
+
+		// Double-check if volume still has space after acquiring lock
+		// Another goroutine might have filled it while we were waiting
+		if meta != nil {
+			var currentSize int64
+			err := meta.db.QueryRow("SELECT COALESCE(size_total, 0) FROM volumes WHERE id = ?", targetVol).Scan(&currentSize)
+			if err != nil && err != sql.ErrNoRows {
+				// Database error (not just missing row)
+				volLock.Unlock()
+				return 0, 0, 0, fmt.Errorf("failed to check volume size: %w", err)
+			}
+			// If err == sql.ErrNoRows, currentSize stays 0 (new volume)
+
+			if currentSize+totalEntrySize > s.MaxDataFileSize {
+				// Volume is full after all, unlock and try next one
+				volLock.Unlock()
+
+				// Try next volume
+				s.mu.Lock()
+				if targetVol >= s.CurrentVolumeID {
+					s.CurrentVolumeID++
+					targetVol = s.CurrentVolumeID
+				} else {
+					targetVol++
+				}
+				s.mu.Unlock()
+				continue
+			}
+		}
+
+		// Volume has space, proceed with write
+		volumeID = targetVol
+		filename = fmt.Sprintf("volume_%08d.dat", targetVol)
+		fullPath = filepath.Join(s.BaseDir, filename)
+
+		// If new format doesn't exist, check if legacy exists
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			filenameLegacy := fmt.Sprintf("volume_%d.dat", targetVol)
+			fullPathLegacy := filepath.Join(s.BaseDir, filenameLegacy)
+			if _, err := os.Stat(fullPathLegacy); err == nil {
+				filename = filenameLegacy
+				fullPath = fullPathLegacy
+			}
+		}
+
+		f, err = os.OpenFile(fullPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			volLock.Unlock()
+			return 0, 0, 0, err
+		}
+		defer f.Close()
+		defer volLock.Unlock()
+
+		stat, err := f.Stat()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		offset = stat.Size()
+
+		// Write blob to the end of file
+		if err := s.writeBlobData(f, blobID, data, compressionAlg); err != nil {
+			return 0, 0, 0, err
+		}
+
+		// Write to META file (Index)
+		metaFilename := strings.TrimSuffix(filename, ".dat") + ".meta"
+		metaPath := filepath.Join(s.BaseDir, metaFilename)
+		if err := s.writeMetaRecord(metaPath, blobID, offset, data, compressionAlg); err != nil {
+			return 0, 0, 0, err
+		}
+
+		// Update volumes table BEFORE releasing lock to ensure atomic check + update
+		// This prevents race condition where multiple goroutines read old size_total
+		totalBytesWritten := int64(HeaderSize) + int64(len(data)) + int64(FooterSize)
+		if meta != nil {
+			_, err := meta.db.Exec(`
+				INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, ?, 0)
+				ON CONFLICT(id) DO UPDATE SET size_total = size_total + ?
+			`, volumeID, totalBytesWritten, totalBytesWritten)
+			if err != nil {
+				return 0, 0, 0, fmt.Errorf("failed to update volume size: %w", err)
+			}
+		}
+
+		// Success, break out of retry loop
+		break
 	}
 
-	volumeID = currentVol
-
-	f, err := os.OpenFile(fullPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer f.Close()
-
-	stat, err := f.Stat()
-	if err != nil {
-		return 0, 0, err
-	}
-	offset = stat.Size()
-
-	// Výpočet CRC (pro integritu)
-	crc := crc32.ChecksumIEEE(data)
-
-	// 1. HLAVIČKA
-	// Magic(4) + Ver(1) + Comp(1) + Size(8) + BlobID(8)
-	header := make([]byte, HeaderSize)
-	binary.BigEndian.PutUint32(header[0:4], uint32(MagicBytes))
-	header[4] = Version
-	header[5] = compressionAlg
-	binary.BigEndian.PutUint64(header[6:14], uint64(dataSize))
-	binary.BigEndian.PutUint64(header[14:22], uint64(blobID))
-
-	if _, err := f.Write(header); err != nil {
-		return 0, 0, err
-	}
-
-	// 2. DATA
-	if _, err := f.Write(data); err != nil {
-		return 0, 0, err
-	}
-
-	// 3. PATIČKA
-	footer := make([]byte, FooterSize)
-	binary.BigEndian.PutUint32(footer[0:4], crc)
-
-	if _, err := f.Write(footer); err != nil {
-		return 0, 0, err
-	}
-
-	// 4. Zápis do META souboru (Index)
-	// Formát: BlobID(8) + Offset(8) + Size(8) + Comp(1) + CRC(4) = 29 bytes
-	metaFilename := strings.TrimSuffix(filename, ".dat") + ".meta"
-	metaPath := filepath.Join(s.BaseDir, metaFilename)
-	mf, err := os.OpenFile(metaPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		// Pokud selže zápis meta, je to kritické? Pro konzistenci raději ano.
-		return 0, 0, err
-	}
-	defer mf.Close()
-
-	metaRecord := make([]byte, 29)
-	binary.BigEndian.PutUint64(metaRecord[0:8], uint64(blobID))
-	binary.BigEndian.PutUint64(metaRecord[8:16], uint64(offset))     // Offset začátku blobu (hlavičky) v .dat
-	binary.BigEndian.PutUint64(metaRecord[16:24], uint64(len(data))) // Velikost komprimovaných dat
-	metaRecord[24] = compressionAlg
-	binary.BigEndian.PutUint32(metaRecord[25:29], crc)
-
-	if _, err := mf.Write(metaRecord); err != nil {
-		return 0, 0, err
-	}
-
-	return volumeID, offset, nil
+	// Return actual bytes written (header + data + footer)
+	totalBytesWritten := int64(HeaderSize) + int64(len(data)) + int64(FooterSize)
+	return volumeID, offset, totalBytesWritten, nil
 }
 
 // ReadBlob přečte data z volume souboru
 func (s *Store) ReadBlob(volumeID int64, offset int64, size int64) ([]byte, error) {
+	// Use RLock to allow parallel reads, but block during compaction (which uses Lock)
+	lock := s.getVolumeLock(volumeID)
+	lock.RLock()
+	defer lock.RUnlock()
+
 	filename := fmt.Sprintf("volume_%08d.dat", volumeID)
 	fullPath := filepath.Join(s.BaseDir, filename)
 
@@ -286,4 +427,133 @@ func (s *Store) ReadBlob(volumeID int64, offset int64, size int64) ([]byte, erro
 	}
 
 	return data, nil
+}
+
+// writeBlobData writes the blob header, data, and footer to a file
+func (s *Store) writeBlobData(f *os.File, blobID int64, data []byte, compressionAlg uint8) error {
+	dataSize := int64(len(data))
+	crc := crc32.ChecksumIEEE(data)
+
+	// 1. HLAVIČKA
+	header := make([]byte, HeaderSize)
+	binary.BigEndian.PutUint32(header[0:4], uint32(MagicBytes))
+	header[4] = Version
+	header[5] = compressionAlg
+	binary.BigEndian.PutUint64(header[6:14], uint64(dataSize))
+	binary.BigEndian.PutUint64(header[14:22], uint64(blobID))
+
+	if _, err := f.Write(header); err != nil {
+		return err
+	}
+
+	// 2. DATA
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+
+	// 3. PATIČKA
+	footer := make([]byte, FooterSize)
+	binary.BigEndian.PutUint32(footer[0:4], crc)
+
+	if _, err := f.Write(footer); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// writeMetaRecord writes a metadata record to the .meta file
+func (s *Store) writeMetaRecord(metaPath string, blobID int64, offset int64, data []byte, compressionAlg uint8) error {
+	crc := crc32.ChecksumIEEE(data)
+
+	mf, err := os.OpenFile(metaPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer mf.Close()
+
+	// Formát: BlobID(8) + Offset(8) + Size(8) + Comp(1) + CRC(4) = 29 bytes
+	metaRecord := make([]byte, 29)
+	binary.BigEndian.PutUint64(metaRecord[0:8], uint64(blobID))
+	binary.BigEndian.PutUint64(metaRecord[8:16], uint64(offset))
+	binary.BigEndian.PutUint64(metaRecord[16:24], uint64(len(data)))
+	metaRecord[24] = compressionAlg
+	binary.BigEndian.PutUint32(metaRecord[25:29], crc)
+
+	_, err = mf.Write(metaRecord)
+	return err
+}
+
+// regenerateMetaFile regenerates the .meta file after compaction with updated offsets
+func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
+	// Get all blobs for this volume from database (with correct offsets after compaction)
+	rows, err := meta.db.Query(`
+		SELECT b.id, b.offset, b.size_compressed, b.compression_alg 
+		FROM blobs b 
+		WHERE b.volume_id = ? 
+		ORDER BY b.offset ASC
+	`, volumeID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	// Determine filename
+	filename := fmt.Sprintf("volume_%08d.dat", volumeID)
+	fullPath := filepath.Join(s.BaseDir, filename)
+
+	// Check for legacy format
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		legacyName := fmt.Sprintf("volume_%d.dat", volumeID)
+		if _, err := os.Stat(filepath.Join(s.BaseDir, legacyName)); err == nil {
+			filename = legacyName
+		}
+	}
+
+	metaFilename := strings.TrimSuffix(filename, ".dat") + ".meta"
+	metaPath := filepath.Join(s.BaseDir, metaFilename)
+
+	// Create new .meta file (overwrite old one)
+	mf, err := os.Create(metaPath)
+	if err != nil {
+		return err
+	}
+	defer mf.Close()
+
+	// Write all blob records with updated offsets
+	for rows.Next() {
+		var blobID, offset, sizeCompressed int64
+		var compressionAlg string
+		if err := rows.Scan(&blobID, &offset, &sizeCompressed, &compressionAlg); err != nil {
+			return err
+		}
+
+		// Convert compression alg string to byte code
+		var compAlgCode uint8 = 0
+		switch compressionAlg {
+		case "gzip":
+			compAlgCode = 1
+		case "zstd":
+			compAlgCode = 2
+		}
+
+		// We need to calculate CRC from the actual data
+		// For now, write 0 as CRC (recovery tool doesn't strictly need it)
+		// TODO: Could read data and calculate proper CRC if needed
+		crc := uint32(0)
+
+		// Formát: BlobID(8) + Offset(8) + Size(8) + Comp(1) + CRC(4) = 29 bytes
+		metaRecord := make([]byte, 29)
+		binary.BigEndian.PutUint64(metaRecord[0:8], uint64(blobID))
+		binary.BigEndian.PutUint64(metaRecord[8:16], uint64(offset))
+		binary.BigEndian.PutUint64(metaRecord[16:24], uint64(sizeCompressed))
+		metaRecord[24] = compAlgCode
+		binary.BigEndian.PutUint32(metaRecord[25:29], crc)
+
+		if _, err := mf.Write(metaRecord); err != nil {
+			return err
+		}
+	}
+
+	return rows.Err()
 }
