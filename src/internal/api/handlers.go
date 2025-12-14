@@ -35,7 +35,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/health", s.HandleHealth)
 	mux.Handle("/metrics", promhttp.Handler())
 
-	mux.HandleFunc("/base/files/old/id/", s.HandleBaseDownloadByOldID)
+	mux.HandleFunc("/base/files/old/", s.HandleBaseDownloadByOldID)
 	mux.HandleFunc("/base/files/old/info/", s.HandleBaseFileInfoByOldID)
 	mux.HandleFunc("/base/files/delete/", s.HandleBaseDelete)
 	mux.HandleFunc("/base/files/delete", s.HandleBaseDelete)
@@ -526,9 +526,9 @@ func (s *Server) HandleHealthFunc(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {file} file "File content"
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
-// @Router /base/files/old/id/{cumulus_id} [get]
+// @Router /base/files/old/{cumulus_id} [get]
 func (s *Server) HandleBaseDownloadByOldID(w http.ResponseWriter, r *http.Request) {
-	s.HandleDownloadByOldIDFunc(w, r, "/base/files/old/id/")
+	s.HandleDownloadByOldIDFunc(w, r, "/base/files/old/")
 }
 
 // HandleFileInfoByOldID retrieves file information by old Cumulus ID

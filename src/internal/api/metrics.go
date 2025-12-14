@@ -144,7 +144,7 @@ func normalizePath(path string) string {
 	}
 
 	// Replace numeric IDs in common patterns
-	// /base/files/id/12345 -> /base/files/id/:id
+	// /base/files/old/12345 -> /base/files/old/:id
 	// /v2/files/old/12345 -> /v2/files/old/:id
 	parts := []string{}
 	for _, part := range splitPath(path) {
