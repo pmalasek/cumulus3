@@ -650,6 +650,40 @@ See [LOGGING.md](LOGGING.md) for detailed logging documentation.
 
 Cumulus3 includes several maintenance tools for database optimization and disaster recovery.
 
+### Admin Web Interface (NEW!)
+
+**Modern web-based admin interface for complete storage management:**
+
+Access at: `http://localhost:8800/admin` (default login: admin/admin)
+
+**Features:**
+- 📊 **Real-time Statistics Dashboard** - BLOB counts, sizes, compression ratios, deduplication stats
+- 💿 **Volume Management** - View all volumes with fragmentation levels, compact individual or all volumes
+- 🔍 **Integrity Checks** - Detect orphaned blobs and missing references
+- ⚙️ **Job Tracking** - Monitor running operations with progress updates
+- 🔄 **Auto-refresh** - Live updates every 3 seconds during operations
+
+For details, see [ADMIN.md](ADMIN.md)
+
+### System API
+
+**RESTful API for programmatic access:**
+
+```bash
+# Get statistics
+curl http://localhost:8800/system/stats
+
+# Compact volume
+curl -X POST http://localhost:8800/system/compact \
+  -H "Content-Type: application/json" \
+  -d '{"volumeId": 1}'
+
+# Check integrity
+curl http://localhost:8800/system/integrity
+```
+
+All operations are asynchronous with job tracking. See [ADMIN.md](ADMIN.md) for complete API documentation.
+
 ### Compact Tool
 
 Reclaim space from deleted files and optimize volumes:
@@ -895,12 +929,14 @@ See [MIGRATION.md](MIGRATION.md) for complete migration guide.
 
 Comprehensive documentation available:
 
+- **[ADMIN.md](ADMIN.md)** - ⭐ Admin web interface and System API documentation
 - **[DEPLOYMENT.md](DEPLOYMENT.md)** - Production deployment, Docker, Nginx, SSL
 - **[LOGGING.md](LOGGING.md)** - Logging configuration, formats, aggregation
 - **[REBUILD-DB.md](REBUILD-DB.md)** - Database recovery procedures
 - **[MIGRATION.md](MIGRATION.md)** - Migration from Cumulus 1.x/2.x
 - **[SPACE-REUSE.md](SPACE-REUSE.md)** - Space management after compaction
 - **[CHANGELOG-LOGGING.md](CHANGELOG-LOGGING.md)** - Logging system changelog
+- **[docs/ADMIN-DEV.md](docs/ADMIN-DEV.md)** - Admin system technical documentation for developers
 - **[Swagger UI](http://localhost:8800/docs/)** - Interactive API documentation
 
 ## Performance Characteristics

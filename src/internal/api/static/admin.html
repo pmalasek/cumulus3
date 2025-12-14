@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cumulus3 Admin</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #0f172a;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .header {
+            background: #1e293b;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            margin-bottom: 30px;
+            border: 1px solid #334155;
+        }
+        h1 {
+            color: #f1f5f9;
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #94a3b8;
+            font-size: 16px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: #1e293b;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.5);
+            border: 1px solid #334155;
+        }
+        .card h2 {
+            color: #f1f5f9;
+            font-size: 18px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #3b82f6;
+            padding-bottom: 10px;
+        }
+        .stat {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #334155;
+        }
+        .stat:last-child {
+            border-bottom: none;
+        }
+        .stat-label {
+            color: #94a3b8;
+            font-weight: 500;
+        }
+        .stat-value {
+            color: #e2e8f0;
+            font-weight: 700;
+        }
+        .button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
+            margin: 5px;
+        }
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(59, 130, 246, 0.5);
+            background: #2563eb;
+        }
+        .button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .button-danger {
+            background: #dc2626;
+        }
+        .button-danger:hover {
+            background: #b91c1c;
+            box-shadow: 0 5px 15px rgba(220, 38, 38, 0.5);
+        }
+        .button-success {
+            background: #059669;
+        }
+        .button-success:hover {
+            background: #047857;
+            box-shadow: 0 5px 15px rgba(5, 150, 105, 0.5);
+        }
+        .volumes-section {
+            background: #1e293b;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.5);
+            margin-bottom: 30px;
+            border: 1px solid #334155;
+        }
+        .volumes-section h2 {
+            color: #f1f5f9;
+            font-size: 18px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #3b82f6;
+            padding-bottom: 10px;
+        }
+        .volume-item {
+            background: #0f172a;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border-left: 4px solid #3b82f6;
+        }
+        .volume-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .volume-id {
+            font-size: 18px;
+            font-weight: 700;
+            color: #f1f5f9;
+        }
+        .volume-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #334155;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #3b82f6;
+            transition: width 0.3s;
+        }
+        .jobs-section {
+            background: #1e293b;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.5);
+            border: 1px solid #334155;
+        }
+        .jobs-section h2 {
+            color: #f1f5f9;
+            font-size: 18px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #3b82f6;
+            padding-bottom: 10px;
+        }
+        .job-item {
+            background: #0f172a;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 4px solid #3b82f6;
+        }
+        .job-running {
+            border-left-color: #f59e0b;
+            animation: pulse 2s infinite;
+        }
+        .job-completed {
+            border-left-color: #10b981;
+        }
+        .job-failed {
+            border-left-color: #dc2626;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #94a3b8;
+        }
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .alert-info {
+            background: #1e3a5f;
+            color: #60a5fa;
+            border-left: 4px solid #3b82f6;
+        }
+        .alert-success {
+            background: #1e4a3a;
+            color: #34d399;
+            border-left: 4px solid #10b981;
+        }
+        .alert-error {
+            background: #4a1e1e;
+            color: #f87171;
+            border-left: 4px solid #dc2626;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗄️ Cumulus3 Storage Admin</h1>
+            <p class="subtitle">Storage Management & Maintenance</p>
+        </div>
+
+        <div id="alerts"></div>
+
+        <div class="grid">
+            <div class="card">
+                <h2>📦 BLOB Statistics</h2>
+                <div class="stat">
+                    <span class="stat-label">BLOB Count:</span>
+                    <span class="stat-value" id="blob-count">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Size (compressed):</span>
+                    <span class="stat-value" id="blob-size">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Raw Size:</span>
+                    <span class="stat-value" id="blob-raw-size">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Compression Ratio:</span>
+                    <span class="stat-value" id="compression-ratio">-</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>📄 Files</h2>
+                <div class="stat">
+                    <span class="stat-label">File Count:</span>
+                    <span class="stat-value" id="file-count">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Deduplicated:</span>
+                    <span class="stat-value" id="dedup-count">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Deduplication Ratio:</span>
+                    <span class="stat-value" id="dedup-ratio">-</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>💾 Storage</h2>
+                <div class="stat">
+                    <span class="stat-label">Total Size:</span>
+                    <span class="stat-value" id="storage-total">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Used:</span>
+                    <span class="stat-value" id="storage-used">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Deleted (free):</span>
+                    <span class="stat-value" id="storage-deleted">-</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Fragmentation:</span>
+                    <span class="stat-value" id="storage-fragmentation">-</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="jobs-section">
+            <h2>⚙️ Running Jobs</h2>
+            <button class="button" onclick="refreshJobs()">🔄 Refresh</button>
+            <div id="jobs-list" class="loading">Loading...</div>
+        </div>
+
+        <div class="volumes-section">
+            <h2>💿 Volumes</h2>
+            <div class="actions">
+                <button class="button button-success" onclick="compactAll()">🔧 Compact All</button>
+                <button class="button" onclick="refreshVolumes()">🔄 Refresh</button>
+                <button class="button button-danger" onclick="checkIntegrity()">🔍 Check Integrity</button>
+            </div>
+            <div id="volumes-list" class="loading">Loading...</div>
+        </div>
+    </div>
+
+    <script src="/admin/script.js"></script>
+</body>
+</html>

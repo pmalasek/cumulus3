@@ -49,6 +49,18 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("/docs/", httpSwagger.WrapHandler)
 
+	// System API endpoints
+	mux.HandleFunc("/system/stats", s.HandleSystemStats)
+	mux.HandleFunc("/system/volumes", s.HandleSystemVolumes)
+	mux.HandleFunc("/system/compact", s.HandleSystemCompact)
+	mux.HandleFunc("/system/jobs", s.HandleSystemJobs)
+	mux.HandleFunc("/system/integrity", s.HandleSystemIntegrity)
+
+	// Admin UI (protected with basic auth)
+	username, password := GetAdminCredentials()
+	mux.Handle("/admin", AdminAuthMiddleware(username, password, http.HandlerFunc(s.HandleAdmin)))
+	mux.Handle("/admin/script.js", AdminAuthMiddleware(username, password, http.HandlerFunc(s.HandleAdminScript)))
+
 	// Wrap with metrics middleware
 	return MetricsMiddleware(mux)
 }
