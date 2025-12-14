@@ -504,65 +504,78 @@ func (s *Server) performDeepIntegrityCheck(job *Job) {
 	}
 
 	// Check blob readability (read first 100 bytes of each blob to verify it's accessible)
+	// Process in batches to avoid holding database locks for too long
 	globalJobManager.UpdateJob(job.ID, JobStatusRunning, fmt.Sprintf("Verifying blob readability (0/%d)", totalBlobCount), nil)
-
-	blobRows, err := s.FileService.MetaStore.GetDB().Query(`
-		SELECT id, volume_id, offset, size_compressed FROM blobs ORDER BY volume_id, offset
-	`)
-	if err != nil {
-		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
-		return
-	}
-	defer blobRows.Close()
 
 	unreadableBlobs := int64(0)
 	totalChecked := int64(0)
 	currentVolume := -1
 	var volumeFile *os.File
+	defer func() {
+		if volumeFile != nil {
+			volumeFile.Close()
+		}
+	}()
 
-	for blobRows.Next() {
-		var blobID, volumeID int64
-		var offset, sizeCompressed int64
-		if err := blobRows.Scan(&blobID, &volumeID, &offset, &sizeCompressed); err != nil {
-			continue
+	batchSize := int64(1000)
+	testBuffer := make([]byte, 100) // Reuse buffer
+
+	for offset := int64(0); offset < totalBlobCount; offset += batchSize {
+		// Query blobs in batches to release database locks between batches
+		blobRows, err := s.FileService.MetaStore.GetDB().Query(`
+			SELECT id, volume_id, offset, size_compressed 
+			FROM blobs 
+			ORDER BY volume_id, offset 
+			LIMIT ? OFFSET ?
+		`, batchSize, offset)
+		if err != nil {
+			globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
+			return
 		}
 
-		totalChecked++
-		if totalChecked%100 == 0 {
-			percentage := float64(totalChecked) / float64(totalBlobCount) * 100
-			globalJobManager.UpdateJob(job.ID, JobStatusRunning,
-				fmt.Sprintf("Checked %d/%d blobs (%.1f%%)", totalChecked, totalBlobCount, percentage), nil)
-		}
-
-		// Open volume file if needed
-		if currentVolume != int(volumeID) {
-			if volumeFile != nil {
-				volumeFile.Close()
+		for blobRows.Next() {
+			var blobID, volumeID int64
+			var blobOffset, sizeCompressed int64
+			if err := blobRows.Scan(&blobID, &volumeID, &blobOffset, &sizeCompressed); err != nil {
+				continue
 			}
-			volumePath := fmt.Sprintf("%s/volume_%08d.dat", s.FileService.Store.BaseDir, volumeID)
-			volumeFile, err = os.Open(volumePath)
-			if err != nil {
-				// Try legacy format
-				volumePath = fmt.Sprintf("%s/volume_%d.dat", s.FileService.Store.BaseDir, volumeID)
+
+			totalChecked++
+			if totalChecked%100 == 0 {
+				percentage := float64(totalChecked) / float64(totalBlobCount) * 100
+				globalJobManager.UpdateJob(job.ID, JobStatusRunning,
+					fmt.Sprintf("Checked %d/%d blobs (%.1f%%)", totalChecked, totalBlobCount, percentage), nil)
+			}
+
+			// Open volume file if needed
+			if currentVolume != int(volumeID) {
+				if volumeFile != nil {
+					volumeFile.Close()
+				}
+				volumePath := fmt.Sprintf("%s/volume_%08d.dat", s.FileService.Store.BaseDir, volumeID)
 				volumeFile, err = os.Open(volumePath)
 				if err != nil {
-					unreadableBlobs++
-					continue
+					// Try legacy format
+					volumePath = fmt.Sprintf("%s/volume_%d.dat", s.FileService.Store.BaseDir, volumeID)
+					volumeFile, err = os.Open(volumePath)
+					if err != nil {
+						unreadableBlobs++
+						continue
+					}
 				}
+				currentVolume = int(volumeID)
 			}
-			currentVolume = int(volumeID)
-		}
 
-		// Try to read first 100 bytes of blob (header)
-		testBuffer := make([]byte, 100)
-		_, err := volumeFile.ReadAt(testBuffer, offset)
-		if err != nil && err != io.EOF {
-			unreadableBlobs++
+			// Try to read first 100 bytes of blob (header)
+			_, err := volumeFile.ReadAt(testBuffer, blobOffset)
+			if err != nil && err != io.EOF {
+				unreadableBlobs++
+			}
 		}
-	}
+		blobRows.Close()
 
-	if volumeFile != nil {
-		volumeFile.Close()
+		// Small pause between batches to allow other operations
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	result["unreadableBlobs"] = unreadableBlobs
