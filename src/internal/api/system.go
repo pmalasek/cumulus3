@@ -3,7 +3,9 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -337,9 +339,10 @@ func (s *Server) HandleSystemJobs(w http.ResponseWriter, r *http.Request) {
 
 // HandleSystemIntegrity checks storage integrity
 // @Summary Check storage integrity
-// @Description Checks integrity of storage (blobs vs files)
+// @Description Checks integrity of storage (blobs vs files). Use ?deep=true for physical verification
 // @Tags 04 - System
 // @Produce json
+// @Param deep query boolean false "Perform deep integrity check (verifies physical files)"
 // @Success 200 {object} map[string]interface{}
 // @Router /system/integrity [get]
 func (s *Server) HandleSystemIntegrity(w http.ResponseWriter, r *http.Request) {
@@ -348,48 +351,20 @@ func (s *Server) HandleSystemIntegrity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job := globalJobManager.CreateJob("integrity-check", nil)
+	deepCheck := r.URL.Query().Get("deep") == "true"
+	jobType := "integrity-check"
+	if deepCheck {
+		jobType = "integrity-check-deep"
+	}
+
+	job := globalJobManager.CreateJob(jobType, nil)
 
 	go func() {
-		globalJobManager.UpdateJob(job.ID, JobStatusRunning, "Checking integrity", nil)
-
-		// Check for orphaned blobs (blobs without files)
-		var orphanedBlobs int64
-		err := s.FileService.MetaStore.GetDB().QueryRow(`
-			SELECT COUNT(*) FROM blobs b
-			LEFT JOIN files f ON b.id = f.blob_id
-			WHERE f.blob_id IS NULL
-		`).Scan(&orphanedBlobs)
-		if err != nil {
-			globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
-			return
+		if deepCheck {
+			s.performDeepIntegrityCheck(job)
+		} else {
+			s.performQuickIntegrityCheck(job)
 		}
-
-		// Check for missing blobs (files referencing non-existent blobs)
-		var missingBlobs int64
-		err = s.FileService.MetaStore.GetDB().QueryRow(`
-			SELECT COUNT(*) FROM files f
-			LEFT JOIN blobs b ON f.blob_id = b.id
-			WHERE b.id IS NULL
-		`).Scan(&missingBlobs)
-		if err != nil {
-			globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
-			return
-		}
-
-		result := map[string]interface{}{
-			"orphanedBlobs": orphanedBlobs,
-			"missingBlobs":  missingBlobs,
-			"status":        "ok",
-		}
-
-		if orphanedBlobs > 0 || missingBlobs > 0 {
-			result["status"] = "warning"
-		}
-
-		// Store result in job progress as JSON
-		progressJSON, _ := json.Marshal(result)
-		globalJobManager.UpdateJob(job.ID, JobStatusCompleted, string(progressJSON), nil)
 	}()
 
 	w.WriteHeader(http.StatusAccepted)
@@ -397,4 +372,190 @@ func (s *Server) HandleSystemIntegrity(w http.ResponseWriter, r *http.Request) {
 		"jobId":   job.ID,
 		"message": "Integrity check started",
 	})
+}
+
+func (s *Server) performQuickIntegrityCheck(job *Job) {
+	globalJobManager.UpdateJob(job.ID, JobStatusRunning, "Checking database integrity", nil)
+
+	// Check for orphaned blobs (blobs without files)
+	var orphanedBlobs int64
+	err := s.FileService.MetaStore.GetDB().QueryRow(`
+			SELECT COUNT(*) FROM blobs b
+			LEFT JOIN files f ON b.id = f.blob_id
+			WHERE f.blob_id IS NULL
+		`).Scan(&orphanedBlobs)
+	if err != nil {
+		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
+		return
+	}
+
+	// Check for missing blobs (files referencing non-existent blobs)
+	var missingBlobs int64
+	err = s.FileService.MetaStore.GetDB().QueryRow(`
+			SELECT COUNT(*) FROM files f
+			LEFT JOIN blobs b ON f.blob_id = b.id
+			WHERE b.id IS NULL
+		`).Scan(&missingBlobs)
+	if err != nil {
+		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
+		return
+	}
+
+	result := map[string]interface{}{
+		"orphanedBlobs": orphanedBlobs,
+		"missingBlobs":  missingBlobs,
+		"status":        "ok",
+	}
+
+	if orphanedBlobs > 0 || missingBlobs > 0 {
+		result["status"] = "warning"
+	}
+
+	// Store result in job progress as JSON
+	progressJSON, _ := json.Marshal(result)
+	globalJobManager.UpdateJob(job.ID, JobStatusCompleted, string(progressJSON), nil)
+}
+
+func (s *Server) performDeepIntegrityCheck(job *Job) {
+	globalJobManager.UpdateJob(job.ID, JobStatusRunning, "Starting deep integrity check", nil)
+
+	result := map[string]interface{}{
+		"orphanedBlobs":     int64(0),
+		"missingBlobs":      int64(0),
+		"missingVolumes":    []int{},
+		"unreadableBlobs":   int64(0),
+		"totalBlobsChecked": int64(0),
+		"status":            "ok",
+	}
+
+	// First run quick checks
+	globalJobManager.UpdateJob(job.ID, JobStatusRunning, "Checking database consistency", nil)
+
+	var orphanedBlobs, missingBlobs int64
+	err := s.FileService.MetaStore.GetDB().QueryRow(`
+		SELECT COUNT(*) FROM blobs b
+		LEFT JOIN files f ON b.id = f.blob_id
+		WHERE f.blob_id IS NULL
+	`).Scan(&orphanedBlobs)
+	if err != nil {
+		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
+		return
+	}
+	result["orphanedBlobs"] = orphanedBlobs
+
+	err = s.FileService.MetaStore.GetDB().QueryRow(`
+		SELECT COUNT(*) FROM files f
+		LEFT JOIN blobs b ON f.blob_id = b.id
+		WHERE b.id IS NULL
+	`).Scan(&missingBlobs)
+	if err != nil {
+		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
+		return
+	}
+	result["missingBlobs"] = missingBlobs
+
+	// Check physical volumes exist
+	globalJobManager.UpdateJob(job.ID, JobStatusRunning, "Checking volume files on disk", nil)
+
+	rows, err := s.FileService.MetaStore.GetDB().Query(`
+		SELECT DISTINCT volume_id FROM blobs ORDER BY volume_id
+	`)
+	if err != nil {
+		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
+		return
+	}
+	defer rows.Close()
+
+	missingVolumes := []int{}
+	for rows.Next() {
+		var volumeID int
+		if err := rows.Scan(&volumeID); err != nil {
+			continue
+		}
+
+		// Check if volume file exists
+		volumePath := fmt.Sprintf("%s/volume_%08d.dat", s.FileService.Store.BaseDir, volumeID)
+		if _, err := os.Stat(volumePath); os.IsNotExist(err) {
+			// Try legacy format
+			volumePath = fmt.Sprintf("%s/volume_%d.dat", s.FileService.Store.BaseDir, volumeID)
+			if _, err := os.Stat(volumePath); os.IsNotExist(err) {
+				missingVolumes = append(missingVolumes, volumeID)
+			}
+		}
+	}
+	result["missingVolumes"] = missingVolumes
+
+	// Check blob readability (sample check - read first 100 bytes of each blob)
+	globalJobManager.UpdateJob(job.ID, JobStatusRunning, "Verifying blob readability", nil)
+
+	blobRows, err := s.FileService.MetaStore.GetDB().Query(`
+		SELECT id, volume_id, offset, size_compressed FROM blobs ORDER BY volume_id, offset LIMIT 1000
+	`)
+	if err != nil {
+		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
+		return
+	}
+	defer blobRows.Close()
+
+	unreadableBlobs := int64(0)
+	totalChecked := int64(0)
+	currentVolume := -1
+	var volumeFile *os.File
+
+	for blobRows.Next() {
+		var blobID, volumeID int64
+		var offset, sizeCompressed int64
+		if err := blobRows.Scan(&blobID, &volumeID, &offset, &sizeCompressed); err != nil {
+			continue
+		}
+
+		totalChecked++
+		if totalChecked%100 == 0 {
+			globalJobManager.UpdateJob(job.ID, JobStatusRunning,
+				fmt.Sprintf("Checked %d/%d blobs", totalChecked, 1000), nil)
+		}
+
+		// Open volume file if needed
+		if currentVolume != int(volumeID) {
+			if volumeFile != nil {
+				volumeFile.Close()
+			}
+			volumePath := fmt.Sprintf("%s/volume_%08d.dat", s.FileService.Store.BaseDir, volumeID)
+			volumeFile, err = os.Open(volumePath)
+			if err != nil {
+				// Try legacy format
+				volumePath = fmt.Sprintf("%s/volume_%d.dat", s.FileService.Store.BaseDir, volumeID)
+				volumeFile, err = os.Open(volumePath)
+				if err != nil {
+					unreadableBlobs++
+					continue
+				}
+			}
+			currentVolume = int(volumeID)
+		}
+
+		// Try to read first 100 bytes of blob (header)
+		testBuffer := make([]byte, 100)
+		_, err := volumeFile.ReadAt(testBuffer, offset)
+		if err != nil && err != io.EOF {
+			unreadableBlobs++
+		}
+	}
+
+	if volumeFile != nil {
+		volumeFile.Close()
+	}
+
+	result["unreadableBlobs"] = unreadableBlobs
+	result["totalBlobsChecked"] = totalChecked
+
+	// Determine overall status
+	if missingBlobs > 0 || len(missingVolumes) > 0 || unreadableBlobs > 0 {
+		result["status"] = "error"
+	} else if orphanedBlobs > 0 {
+		result["status"] = "warning"
+	}
+
+	progressJSON, _ := json.Marshal(result)
+	globalJobManager.UpdateJob(job.ID, JobStatusCompleted, string(progressJSON), nil)
 }

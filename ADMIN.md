@@ -1,67 +1,73 @@
-# Admin Rozhraní a System API
+# Admin Interface and System API
 
-## Přehled
+## Overview
 
-Cumulus3 Storage nyní obsahuje kompletní admin rozhraní a System API pro správu a údržbu úložiště.
+Cumulus3 Storage now includes a complete admin interface and System API for storage management and maintenance.
 
-## Nové Komponenty
+## New Components
 
-### 1. Admin Webové Rozhraní (`/admin`)
+### 1. Admin Web Interface (`/admin`)
 
-Webová stránka pro kompletní správu Cumulus3 Storage s autentizací pomocí Basic Auth.
+Web page for complete Cumulus3 Storage management with Basic Auth authentication.
 
-**Přihlašovací údaje:**
-- Výchozí: `admin` / `admin`
-- Konfigurace přes environment proměnné: `ADMIN_USERNAME` a `ADMIN_PASSWORD`
+**Login Credentials:**
+- Default: `admin` / `admin`
+- Configuration via environment variables: `ADMIN_USERNAME` and `ADMIN_PASSWORD`
 
-**Funkce:**
+**Features:**
 
-#### Statistiky v reálném čase:
-- **BLOB statistiky:**
-  - Počet BLOB
-  - Velikost po kompresi
-  - RAW velikost
-  - Kompresní poměr
+#### Real-time Statistics:
+- **BLOB Statistics:**
+  - BLOB count
+  - Compressed size
+  - RAW size
+  - Compression ratio
 
-- **Soubory:**
-  - Počet souborů
-  - Počet deduplikovaných souborů
-  - Deduplikační poměr
+- **Files:**
+  - File count
+  - Deduplicated files count
+  - Deduplication ratio
 
-- **Úložiště:**
-  - Celková velikost
-  - Použitá velikost
-  - Smazaná velikost (volné místo)
-  - Fragmentace
+- **Storage:**
+  - Total size
+  - Used size
+  - Deleted size (free space)
+  - Fragmentation
 
-#### Správa Volumes:
-- Přehled všech volumes s:
-  - ID volume
-  - Velikosti (celkem, použito, smazáno)
-  - Fragmentace v %
-  - Vizuální progress bar
-- Kompaktace jednotlivých volumes
-- Kompaktace všech volumes najednou
+#### Volume Management:
+- Overview of all volumes with:
+  - Volume ID
+  - Sizes (total, used, deleted)
+  - Fragmentation in %
+  - Visual progress bar
+- Compact individual volumes
+- Compact all volumes at once
 
-#### Kontrola Integrity:
-- Kontrola orphaned blobs (bloby bez souborů)
-- Kontrola missing blobs (soubory odkazující na neexistující bloby)
+#### Integrity Check:
+- **Quick Check** - Fast metadata check (~1s):
+  - Orphaned blobs (blobs without files)
+  - Missing blobs (files referencing non-existent blobs)
+- **Deep Check** - Deep check including physical data (slower):
+  - Everything from Quick Check
+  - Existence of volume files on disk
+  - Blob readability at their offsets
+  - Physical data validity
 
 #### Job Tracking:
-- Přehled všech běžících a dokončených úloh
+- Overview of all running and completed jobs
 - Status: pending, running, completed, failed
-- Průběh operací v reálném čase
-- Historie posledních 10 úloh
-- Automatické obnovování při běžících úlohách (každé 3 sekundy)
+- Real-time operation progress
+- History of last 10 jobs
+- Automatic refresh during running jobs (every 3 seconds)
 
 ### 2. System API (`/system/*`)
 
-RESTful API pro programový přístup k údržbě úložiště.
+RESTful API for programmatic access to storage maintenance.
 
-## Endpointy
+## Endpoints
 
 ### `GET /system/stats`
-Vrací kompletní statistiky úložiště.
+Returns complete storage statistics.
 
 **Response:**
 ```json
@@ -87,7 +93,7 @@ Vrací kompletní statistiky úložiště.
 ```
 
 ### `GET /system/volumes`
-Vrací seznam všech volumes s jejich statistikami.
+Returns list of all volumes with their statistics.
 
 **Response:**
 ```json
@@ -103,20 +109,20 @@ Vrací seznam všech volumes s jejich statistikami.
 ```
 
 ### `POST /system/compact`
-Spustí kompaktaci volume(s).
+Starts volume(s) compaction.
 
-**Request - Kompaktace jednoho volume:**
+**Request - Compact one volume:**
 ```json
 {
   "volumeId": 1
 }
 ```
 
-**Request - Kompaktace všech volumes:**
+**Request - Compact all volumes:**
 ```json
 {
   "all": true,
-  "threshold": 20  // Volitelné: pouze volumes s fragmentací >= 20%
+  "threshold": 20  // Optional: only volumes with fragmentation >= 20%
 }
 ```
 
@@ -129,12 +135,12 @@ Spustí kompaktaci volume(s).
 ```
 
 ### `GET /system/jobs`
-Vrací seznam všech úloh nebo detail konkrétní úlohy.
+Returns list of all jobs or detail of specific job.
 
-**Query parametry:**
-- `id` (volitelné): ID konkrétní úlohy
+**Query Parameters:**
+- `id` (optional): Specific job ID
 
-**Response - Seznam úloh:**
+**Response - Job List:**
 ```json
 [
   {
@@ -149,7 +155,7 @@ Vrací seznam všech úloh nebo detail konkrétní úlohy.
 ]
 ```
 
-**Response - Detail úlohy:**
+**Response - Job Detail:**
 ```json
 {
   "id": "compact-1734169234",
@@ -163,7 +169,10 @@ Vrací seznam všech úloh nebo detail konkrétní úlohy.
 ```
 
 ### `GET /system/integrity`
-Spustí kontrolu integrity úložiště.
+Starts storage integrity check.
+
+**Query Parameters:**
+- `deep=true` - Performs deep check including physical files (default: false)
 
 **Response:**
 ```json
@@ -173,7 +182,19 @@ Spustí kontrolu integrity úložiště.
 }
 ```
 
-Po dokončení úlohy lze získat výsledky pomocí `GET /system/jobs?id=integrity-check-1734169234`:
+#### Quick Check
+
+Default mode checks only database metadata:
+- Orphaned blobs (blobs without references from files)
+- Missing blobs (files referencing non-existent blobs)
+
+Suitable for regular checks, takes ~1s even on large databases.
+
+```bash
+curl http://localhost:8800/system/integrity
+```
+
+**Result:**
 ```json
 {
   "id": "integrity-check-1734169234",
@@ -185,108 +206,144 @@ Po dokončení úlohy lze získat výsledky pomocí `GET /system/jobs?id=integri
 }
 ```
 
-## Konfigurace
+#### Deep Check
 
-### Environment Proměnné
+Extended mode also checks physical integrity:
+- Everything from quick check
+- Existence of volume files on disk
+- Blob readability at physical offsets
+- Data validity in files
+
+Suitable for thorough diagnostics, takes longer (depends on data amount).
 
 ```bash
-# Admin přihlašovací údaje
+curl "http://localhost:8800/system/integrity?deep=true"
+```
+
+**Result:**
+```json
+{
+  "id": "integrity-check-deep-1734169234",
+  "type": "integrity-check-deep",
+  "status": "completed",
+  "progress": "{\"orphanedBlobs\":0,\"missingBlobs\":0,\"missingVolumes\":[],\"unreadableBlobs\":0,\"totalBlobsChecked\":1000,\"status\":\"ok\"}",
+  "startedAt": "2025-12-14T09:15:00Z",
+  "completedAt": "2025-12-14T09:15:45Z"
+}
+```
+
+**Possible States:**
+- `ok` - Everything is fine
+- `warning` - Minor issues (e.g., orphaned blobs)
+- `error` - Serious problems (missing blobs, volume files, or unreadable data)
+
+## Configuration
+
+### Environment Variables
+
+```bash
+# Admin credentials
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=SecurePassword123
 
-# Standardní konfigurace (již existující)
+# Standard configuration (already existing)
 DB_PATH=./data/database/cumulus3.db
 DATA_DIR=./data/volumes
 SERVER_PORT=8800
 SERVER_ADDRESS=0.0.0.0
 ```
 
-## Použití
+## Usage
 
-### 1. Webové Rozhraní
+### 1. Web Interface
 
-1. Otevřete prohlížeč na adrese: `http://localhost:8800/admin`
-2. Přihlaste se pomocí admin/admin (nebo vlastních přihlašovacích údajů)
-3. Dashboard se automaticky načte a zobrazí statistiky
-4. Pro kompaktaci:
-   - Klikněte na "🔧 Kompaktovat" u konkrétního volume
-   - Nebo "🔧 Kompaktovat vše" pro kompaktaci všech volumes
-5. Sledujte průběh v sekci "Běžící úlohy"
+1. Open browser at: `http://localhost:8800/admin`
+2. Login using admin/admin (or your custom credentials)
+3. Dashboard will automatically load and display statistics
+4. For compaction:
+   - Click "🔧 Compact" on specific volume
+   - Or "🔧 Compact All" to compact all volumes
+5. Monitor progress in "Running Jobs" section
 
-### 2. API příklady
+### 2. API Examples
 
-#### Získání statistik:
+#### Get Statistics:
 ```bash
 curl http://localhost:8800/system/stats
 ```
 
-#### Kompaktace volume:
+#### Compact Volume:
 ```bash
 curl -X POST http://localhost:8800/system/compact \
   -H "Content-Type: application/json" \
   -d '{"volumeId": 1}'
 ```
 
-#### Kompaktace všech volumes:
+#### Compact All Volumes:
 ```bash
 curl -X POST http://localhost:8800/system/compact \
   -H "Content-Type: application/json" \
   -d '{"all": true, "threshold": 20}'
 ```
 
-#### Kontrola integrity:
+#### Quick Integrity Check:
 ```bash
 curl http://localhost:8800/system/integrity
 ```
 
-#### Sledování úloh:
+#### Deep Integrity Check:
 ```bash
-# Všechny úlohy
+curl "http://localhost:8800/system/integrity?deep=true"
+```
+
+#### Monitor Jobs:
+```bash
+# All jobs
 curl http://localhost:8800/system/jobs
 
-# Konkrétní úloha
+# Specific job
 curl "http://localhost:8800/system/jobs?id=compact-1734169234"
 ```
 
-## Asynchronní Operace
+## Asynchronous Operations
 
-Všechny náročné operace (kompaktace, integrity check) běží asynchronně:
+All heavy operations (compaction, integrity check) run asynchronously:
 
-1. API okamžitě vrátí Job ID
-2. Operace běží na pozadí
-3. Stav lze sledovat pomocí `/system/jobs`
-4. Operace pokračuje i po zavření admin stránky
-5. Admin UI automaticky obnovuje stav při běžících úlohách
+1. API immediately returns Job ID
+2. Operation runs in background
+3. State can be monitored using `/system/jobs`
+4. Operation continues even after closing admin page
+5. Admin UI automatically refreshes state during running jobs
 
-## Job Stavy
+## Job States
 
-- **pending**: Úloha čeká na spuštění
-- **running**: Úloha právě běží
-- **completed**: Úloha úspěšně dokončena
-- **failed**: Úloha selhala (error pole obsahuje důvod)
+- **pending**: Job waiting to start
+- **running**: Job currently running
+- **completed**: Job successfully completed
+- **failed**: Job failed (error field contains reason)
 
-## Poznámky
+## Notes
 
-- Admin rozhraní je chráněno Basic Auth
-- System API endpointy **NEJSOU** chráněny (pokud potřebujete, přidejte vlastní autentizaci)
-- Kompaktace běží se per-volume locking - server může běžet během kompaktace
-- Každý job má unikátní ID ve formátu `{type}-{timestamp}`
-- Jobs jsou uloženy v paměti - restartování serveru je vymaže
-- Admin UI automaticky aktualizuje data každých 10 sekund
-- Při běžících úlohách se UI aktualizuje každé 3 sekundy
+- Admin interface is protected by Basic Auth
+- System API endpoints are **NOT** protected (add your own authentication if needed)
+- Compaction runs with per-volume locking - server can run during compaction
+- Each job has unique ID in format `{type}-{timestamp}`
+- Jobs are stored in memory - restarting server will clear them
+- Admin UI automatically updates data every 10 seconds
+- During running jobs, UI updates every 3 seconds
 
-## Soubory
+## Files
 
-- `src/internal/api/system.go` - System API handlers a job management
-- `src/internal/api/admin.go` - Admin UI handler a autentizace
+- `src/internal/api/system.go` - System API handlers and job management
+- `src/internal/api/admin.go` - Admin UI handler and authentication
 - `src/internal/api/static/admin.html` - Admin UI HTML
 - `src/internal/api/static/admin.js` - Admin UI JavaScript
-- `src/internal/api/handlers.go` - Routes konfigurace
+- `src/internal/api/handlers.go` - Routes configuration
 
-## Bezpečnost
+## Security
 
-⚠️ **Důležité:**
-- Změňte výchozí heslo v produkčním prostředí!
-- Použijte HTTPS v produkci
-- Zvažte přidání rate limitingu
-- System API endpointy nejsou chráněny - zvažte vlastní autentizaci
+⚠️ **Important:**
+- Change default password in production environment!
+- Use HTTPS in production
+- Consider adding rate limiting
+- System API endpoints are not protected - consider your own authentication

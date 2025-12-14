@@ -107,6 +107,31 @@ async function loadJobs() {
                 ? ((new Date(job.completedAt) - new Date(job.startedAt)) / 1000).toFixed(1) + 's'
                 : 'running...';
             
+            let progressHTML = '';
+            if (job.progress) {
+                try {
+                    const progressData = JSON.parse(job.progress);
+                    if (progressData.orphanedBlobs !== undefined) {
+                        progressHTML = `
+                            <div style="margin-top: 8px; padding: 8px; background: #0f172a; border-radius: 4px; font-size: 12px;">
+                                <div style="color: ${progressData.status === 'ok' ? '#10b981' : progressData.status === 'warning' ? '#f59e0b' : '#ef4444'};">
+                                    Status: ${progressData.status.toUpperCase()}
+                                </div>
+                                ${progressData.orphanedBlobs > 0 ? '<div style="color: #fbbf24;">⚠️ Orphaned blobs: ' + progressData.orphanedBlobs + '</div>' : ''}
+                                ${progressData.missingBlobs > 0 ? '<div style="color: #f87171;">❌ Missing blobs: ' + progressData.missingBlobs + '</div>' : ''}
+                                ${progressData.missingVolumes && progressData.missingVolumes.length > 0 ? '<div style="color: #f87171;">❌ Missing volumes: ' + progressData.missingVolumes.join(', ') + '</div>' : ''}
+                                ${progressData.unreadableBlobs !== undefined && progressData.unreadableBlobs > 0 ? '<div style="color: #f87171;">❌ Unreadable blobs: ' + progressData.unreadableBlobs + '</div>' : ''}
+                                ${progressData.totalBlobsChecked !== undefined ? '<div style="color: #94a3b8;">Checked: ' + progressData.totalBlobsChecked + ' blobs</div>' : ''}
+                            </div>
+                        `;
+                    } else {
+                        progressHTML = '<div style="margin-top: 5px; color: #e2e8f0;">' + job.progress + '</div>';
+                    }
+                } catch (e) {
+                    progressHTML = '<div style="margin-top: 5px; color: #e2e8f0;">' + job.progress + '</div>';
+                }
+            }
+
             return `
                 <div class="job-item ${statusClass}">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
@@ -116,7 +141,7 @@ async function loadJobs() {
                     <div style="font-size: 12px; color: #94a3b8;">
                         Started: ${startTime} | Duration: ${duration}
                     </div>
-                    ${job.progress ? '<div style="margin-top: 5px; color: #e2e8f0;">' + job.progress + '</div>' : ''}
+                    ${progressHTML}
                     ${job.error ? '<div style="margin-top: 5px; color: #f87171;">Error: ' + job.error + '</div>' : ''}
                 </div>
             `;
@@ -180,11 +205,13 @@ async function compactAll() {
     }
 }
 
-async function checkIntegrity() {
+async function checkIntegrity(deep = false) {
     try {
-        const response = await fetch('/system/integrity');
+        const url = deep ? '/system/integrity?deep=true' : '/system/integrity';
+        const response = await fetch(url);
         const data = await response.json();
-        showAlert('Integrity check started: ' + data.jobId, 'info');
+        const checkType = deep ? 'Deep integrity check' : 'Quick integrity check';
+        showAlert(`${checkType} started: ${data.jobId}`, 'info');
         setTimeout(() => {
             loadJobs();
             startAutoRefresh();

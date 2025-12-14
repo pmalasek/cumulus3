@@ -110,6 +110,13 @@
             background: #047857;
             box-shadow: 0 5px 15px rgba(5, 150, 105, 0.5);
         }
+        .button-warning {
+            background: #d97706;
+        }
+        .button-warning:hover {
+            background: #b45309;
+            box-shadow: 0 5px 15px rgba(217, 119, 6, 0.5);
+        }
         .volumes-section {
             background: #1e293b;
             padding: 25px;
@@ -308,7 +315,8 @@
             <div class="actions">
                 <button class="button button-success" onclick="compactAll()">🔧 Compact All</button>
                 <button class="button" onclick="refreshVolumes()">🔄 Refresh</button>
-                <button class="button button-danger" onclick="checkIntegrity()">🔍 Check Integrity</button>
+                <button class="button button-warning" onclick="checkIntegrity(false)">🔍 Quick Check</button>
+                <button class="button button-danger" onclick="checkIntegrity(true)">🔬 Deep Check</button>
             </div>
             <div id="volumes-list" class="loading">Loading...</div>
         </div>
