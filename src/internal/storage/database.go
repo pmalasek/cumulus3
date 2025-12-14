@@ -127,6 +127,9 @@ func initSchema(db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_expires_at ON files(expires_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_old_cumulus_id ON files(old_cumulus_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_files_blob_id ON files(blob_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_blobs_volume_id ON blobs(volume_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_blobs_id ON blobs(id);`,
 	}
 
 	for _, query := range queries {

@@ -356,8 +356,9 @@ func (s *Server) HandleSystemIntegrity(w http.ResponseWriter, r *http.Request) {
 		// Check for orphaned blobs (blobs without files)
 		var orphanedBlobs int64
 		err := s.FileService.MetaStore.GetDB().QueryRow(`
-			SELECT COUNT(*) FROM blobs 
-			WHERE id NOT IN (SELECT DISTINCT blob_id FROM files)
+			SELECT COUNT(*) FROM blobs b
+			LEFT JOIN files f ON b.id = f.blob_id
+			WHERE f.blob_id IS NULL
 		`).Scan(&orphanedBlobs)
 		if err != nil {
 			globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
@@ -367,8 +368,9 @@ func (s *Server) HandleSystemIntegrity(w http.ResponseWriter, r *http.Request) {
 		// Check for missing blobs (files referencing non-existent blobs)
 		var missingBlobs int64
 		err = s.FileService.MetaStore.GetDB().QueryRow(`
-			SELECT COUNT(*) FROM files 
-			WHERE blob_id NOT IN (SELECT id FROM blobs)
+			SELECT COUNT(*) FROM files f
+			LEFT JOIN blobs b ON f.blob_id = b.id
+			WHERE b.id IS NULL
 		`).Scan(&missingBlobs)
 		if err != nil {
 			globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
