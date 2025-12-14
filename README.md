@@ -146,7 +146,7 @@ Cumulus3 separates **Logical Files** (user perspective) from **Physical Blobs** 
 
 ### Storage Flow
 
-```
+```text
 1. Upload Request
    ↓
 2. Stream to MultiWriter (Hash + Compress simultaneously)
@@ -163,6 +163,7 @@ Cumulus3 separates **Logical Files** (user perspective) from **Physical Blobs** 
 ### Data Structures
 
 **Files Table (files):**
+
 - `file_id` - UUID (primary key)
 - `blob_id` - Reference to physical blob
 - `original_filename` - User's filename
@@ -172,6 +173,7 @@ Cumulus3 separates **Logical Files** (user perspective) from **Physical Blobs** 
 - `upload_date`, `validity` - Timestamps
 
 **Blobs Table (blobs):**
+
 - `blob_id` - Sequential ID (primary key)
 - `hash_blake2b256` - Content hash (unique index)
 - `compression_alg` - Compression type (0=none, 1=gzip, 2=zstd)
@@ -181,6 +183,7 @@ Cumulus3 separates **Logical Files** (user perspective) from **Physical Blobs** 
 - `size_compressed` - Stored size
 
 **Volumes Metadata (volumes):**
+
 - `volume_id` - Volume number
 - `size_total` - Current volume size
 - `size_active` - Active (non-deleted) data size
@@ -228,10 +231,11 @@ Cumulus3 is ideal for:
 
 ### Prerequisites
 
-#### For Development:
+#### For Development
 
 - **Go**: Version 1.25 or higher ([download](https://go.dev/dl/))
 - **GCC/G++**: Required for SQLite CGO bindings
+
   ```bash
   # Ubuntu/Debian
   sudo apt-get install build-essential
@@ -239,7 +243,9 @@ Cumulus3 is ideal for:
   # macOS
   xcode-select --install
   ```
+
 - **libvips**: For image processing (optional but recommended)
+
   ```bash
   # Ubuntu/Debian
   sudo apt-get install libvips-dev
@@ -248,7 +254,7 @@ Cumulus3 is ideal for:
   brew install vips
   ```
 
-#### For Production:
+#### For Production
 
 - **Docker**: Version 20.10+ ([install](https://docs.docker.com/engine/install/))
 - **Docker Compose**: V2+ (included with Docker Desktop)
@@ -258,17 +264,20 @@ Cumulus3 is ideal for:
 ### Development Setup
 
 1. **Clone the repository:**
+
    ```bash
    git clone https://github.com/pmalasek/cumulus3.git
    cd cumulus3
    ```
 
 2. **Install dependencies:**
+
    ```bash
    go mod download
    ```
 
 3. **Create environment configuration:**
+
    ```bash
    cp .env.example .env
    # Edit .env with your settings
@@ -276,6 +285,7 @@ Cumulus3 is ideal for:
    ```
 
 4. **Build the application:**
+
    ```bash
    # Build main server
    go build -o build/volume-server ./src/cmd/volume-server
@@ -287,6 +297,7 @@ Cumulus3 is ideal for:
    ```
 
 5. **Run the server:**
+
    ```bash
    ./build/volume-server
    ```
@@ -299,9 +310,10 @@ Cumulus3 is ideal for:
 
 ### Production Deployment
 
-#### Using Docker Compose (Recommended):
+#### Using Docker Compose (Recommended)
 
 1. **Clone and configure:**
+
    ```bash
    git clone https://github.com/pmalasek/cumulus3.git
    cd cumulus3
@@ -309,11 +321,13 @@ Cumulus3 is ideal for:
    ```
 
 2. **Edit configuration:**
+
    ```bash
    nano .env
    ```
-   
+
    Key settings:
+
    ```bash
    SERVER_PORT=8800
    DATA_FILE_SIZE=10GB              # Volume size
@@ -328,7 +342,7 @@ Cumulus3 is ideal for:
    ```bash
    docker-compose up -d
    ```
-   
+
    This starts:
    - Cumulus3 server (port 8800)
 
@@ -350,7 +364,7 @@ Cumulus3 is ideal for:
    - Swagger docs: <http://your-server:8800/docs/>
    - Prometheus: <http://your-server:9090>
 
-#### SSL/TLS Configuration:
+#### SSL/TLS Configuration
 
 For HTTPS in production, use Nginx or a reverse proxy:
 
@@ -375,6 +389,7 @@ server {
 ```
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for complete production deployment guide including:
+
 - SSL/TLS setup with Let's Encrypt
 - Nginx configuration
 - Load balancing
@@ -387,7 +402,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for complete production deployment guide incl
 
 Cumulus3 provides a RESTful API for all operations. Complete API documentation is available via Swagger UI at `/docs/`.
 
-#### Endpoint Categories:
+#### Endpoint Categories
 
 - **Base API** (`/base/*`) - Legacy compatibility endpoints
 - **Files API** (`/v2/files/*`) - Main file operations
@@ -401,6 +416,7 @@ Upload a file to Cumulus3:
 **Endpoint:** `POST /v2/files/upload`
 
 **cURL Example:**
+
 ```bash
 curl -X POST http://localhost:8800/v2/files/upload \
   -F "file=@/path/to/image.jpg" \
@@ -409,6 +425,7 @@ curl -X POST http://localhost:8800/v2/files/upload \
 ```
 
 **Python Example:**
+
 ```python
 import requests
 
@@ -426,6 +443,7 @@ print(f"Uploaded file ID: {file_id}")
 ```
 
 **Response:**
+
 ```json
 {
   "fileID": "550e8400-e29b-41d4-a716-446655440000"
@@ -433,6 +451,7 @@ print(f"Uploaded file ID: {file_id}")
 ```
 
 **Parameters:**
+
 - `file` (required) - File to upload (multipart/form-data)
 - `tags` (optional) - Comma-separated tags or JSON array
 - `old_cumulus_id` (optional) - Legacy system ID for migration
@@ -445,16 +464,19 @@ Download a file by its UUID:
 **Endpoint:** `GET /v2/files/{uuid}`
 
 **cURL Example:**
+
 ```bash
 curl -O http://localhost:8800/v2/files/550e8400-e29b-41d4-a716-446655440000
 ```
 
 **Browser:**
-```
+
+```text
 http://localhost:8800/v2/files/550e8400-e29b-41d4-a716-446655440000
 ```
 
 **Response:**
+
 - HTTP 200: File content with proper Content-Type header
 - HTTP 404: File not found
 - HTTP 410: File expired (when validity exceeded)
@@ -466,6 +488,7 @@ Get resized images and thumbnails on-the-fly:
 **Endpoint:** `GET /v2/images/{uuid}?variant={size}`
 
 **Size Variants:**
+
 - `orig` - Original image (no resizing)
 - `thumb` - 150×150px thumbnail
 - `sm` - 400×400px small
@@ -473,6 +496,7 @@ Get resized images and thumbnails on-the-fly:
 - `lg` - 1200×1200px large
 
 **Examples:**
+
 ```bash
 # Original image
 curl http://localhost:8800/v2/images/550e8400-e29b-41d4-a716-446655440000?variant=orig
@@ -485,6 +509,7 @@ curl http://localhost:8800/v2/images/550e8400-e29b-41d4-a716-446655440000?varian
 ```
 
 **HTML Image Gallery:**
+
 ```html
 <img src="http://localhost:8800/v2/images/{uuid}?variant=thumb" 
      alt="Thumbnail">
@@ -493,6 +518,7 @@ curl http://localhost:8800/v2/images/550e8400-e29b-41d4-a716-446655440000?varian
 ```
 
 **Features:**
+
 - Aspect ratio preserved (no cropping)
 - Images never upscaled beyond original size
 - PDF files: automatic first-page thumbnail
@@ -506,11 +532,13 @@ Get file information without downloading:
 **Endpoint:** `GET /v2/files/info/{uuid}`
 
 **cURL Example:**
+
 ```bash
 curl http://localhost:8800/v2/files/info/550e8400-e29b-41d4-a716-446655440000
 ```
 
 **Response:**
+
 ```json
 {
   "fileID": "550e8400-e29b-41d4-a716-446655440000",
@@ -533,11 +561,13 @@ Delete a file by UUID:
 **Endpoint:** `DELETE /v2/files/delete/{uuid}`
 
 **cURL Example:**
+
 ```bash
 curl -X DELETE http://localhost:8800/base/files/delete/550e8400-e29b-41d4-a716-446655440000
 ```
 
 **Response:**
+
 - HTTP 200: File deleted successfully
 - HTTP 404: File not found
 
@@ -548,11 +578,13 @@ curl -X DELETE http://localhost:8800/base/files/delete/550e8400-e29b-41d4-a716-4
 For migration from old Cumulus versions:
 
 **Download by old ID:**
+
 ```bash
 curl http://localhost:8800/base/files/id/12345
 ```
 
 **Metadata by old ID:**
+
 ```bash
 curl http://localhost:8800/base/files/info/12345
 ```
@@ -593,6 +625,7 @@ SWAGGER_HOST=localhost:8800     # Host for Swagger UI
 ### Size Format
 
 Size values support human-readable formats:
+
 - Bytes: `1024`, `2048`
 - Kilobytes: `1KB`, `512KB`
 - Megabytes: `10MB`, `500MB`
@@ -622,12 +655,14 @@ Cumulus3 includes several maintenance tools for database optimization and disast
 Reclaim space from deleted files and optimize volumes:
 
 **List volumes:**
+
 ```bash
 ./build/compact-tool volumes list
 ```
 
 Output:
-```
+
+```text
 Volume ID | Size (MB) | Active (MB) | Blobs | Fragmentation
 ----------|-----------|-------------|-------|---------------
         1 |   5234.56 |     4123.45 |  1234 |        21.23%
@@ -636,16 +671,19 @@ Volume ID | Size (MB) | Active (MB) | Blobs | Fragmentation
 ```
 
 **Compact specific volume:**
+
 ```bash
 ./build/compact-tool volumes compact 1
 ```
 
 **Compact all fragmented volumes:**
+
 ```bash
 ./build/compact-tool volumes compact-all --threshold 20
 ```
 
 **Database VACUUM (requires downtime):**
+
 ```bash
 # Stop the server first
 docker-compose stop cumulus3
@@ -658,6 +696,7 @@ docker-compose start cumulus3
 ```
 
 **Docker usage:**
+
 ```bash
 # List volumes (server can be running)
 docker exec cumulus3 /app/compact-tool volumes list
@@ -697,21 +736,25 @@ See [REBUILD-DB.md](REBUILD-DB.md) for detailed recovery procedures.
 Cumulus3 exposes comprehensive metrics at `/metrics`:
 
 **Storage Metrics:**
+
 - `cumulus_storage_size_bytes{volume}` - Size per volume
 - `cumulus_storage_files_total` - Total files stored
 - `cumulus_storage_blobs_total` - Total unique blobs
 
 **Performance Metrics:**
+
 - `cumulus_http_requests_total{endpoint,method,status}` - Request count
 - `cumulus_upload_duration_seconds` - Upload latency histogram
 - `cumulus_download_duration_seconds` - Download latency histogram
 
 **Deduplication Metrics:**
+
 - `cumulus_dedup_hits_total` - Duplicate files detected
 - `cumulus_dedup_misses_total` - New unique files
 - `cumulus_dedup_bytes_saved` - Total bytes saved by deduplication
 
 **Compression Metrics:**
+
 - `cumulus_compression_ratio` - Average compression ratio
 - `cumulus_compressed_bytes_saved` - Bytes saved by compression
 
@@ -720,6 +763,7 @@ Cumulus3 exposes comprehensive metrics at `/metrics`:
 **Endpoint:** `GET /health`
 
 **Response:**
+
 ```json
 {
   "status": "healthy",
@@ -730,6 +774,7 @@ Cumulus3 exposes comprehensive metrics at `/metrics`:
 ```
 
 Use for:
+
 - Load balancer health checks
 - Kubernetes liveness/readiness probes
 - Monitoring systems
@@ -739,6 +784,7 @@ Use for:
 Structured logging with multiple output formats:
 
 **JSON format** (production):
+
 ```json
 {
   "timestamp": "2023-12-13T10:30:00Z",
@@ -753,12 +799,14 @@ Structured logging with multiple output formats:
 ```
 
 **Text format** (development):
-```
+
+```text
 2023-12-13 10:30:00 [INFO] UPLOAD: File uploaded successfully 
   uuid=550e8400-e29b-41d4-a716-446655440000 size=2457600 dedup=miss
 ```
 
 Integration with log aggregation:
+
 - Grafana Loki
 - Elasticsearch (ELK Stack)
 - Splunk
@@ -778,6 +826,7 @@ Cumulus3 uses BLAKE2b-256 for content-addressable storage:
 4. **If new**: Write to volume → Create blob + file entries
 
 **Benefits:**
+
 - Zero storage for duplicate content
 - Instant upload for duplicates (no disk I/O)
 - Cryptographically secure (birthday attack resistance)
@@ -786,18 +835,21 @@ Cumulus3 uses BLAKE2b-256 for content-addressable storage:
 ### Volume Management
 
 **Automatic rotation:**
+
 - When volume reaches `DATA_FILE_SIZE`, new volume created
 - Writes continue to new volume seamlessly
 - Old volumes remain read-only
 
 **Manual rotation:**
+
 ```go
 // Trigger manual rotation
 store.RecalculateCurrentVolume()
 ```
 
 **Volume file format:**
-```
+
+```text
 volume_00000001.dat  # New format (8-digit padding)
 volume_00000002.dat
 volume_1.dat         # Legacy format (still supported)
@@ -822,6 +874,7 @@ See [SPACE-REUSE.md](SPACE-REUSE.md) for detailed space management documentation
 Cumulus3 supports gradual migration:
 
 1. **Map old IDs during upload:**
+
    ```bash
    curl -X POST http://localhost:8800/v2/files/upload \
      -F "file=@image.jpg" \
@@ -829,6 +882,7 @@ Cumulus3 supports gradual migration:
    ```
 
 2. **Access by old ID:**
+
    ```bash
    curl http://localhost:8800/base/files/id/12345
    ```
@@ -860,6 +914,7 @@ Comprehensive documentation available:
 - **Storage overhead**: <1% (metadata + volume headers)
 
 **Scalability:**
+
 - **Files**: Tested with 100+ million files
 - **Storage**: Petabyte-scale capable
 - **Concurrent uploads**: Limited by CPU cores and disk I/O
@@ -870,18 +925,22 @@ Comprehensive documentation available:
 ### Common Issues
 
 **Problem:** "Database is locked"
+
 - **Cause:** Multiple processes accessing database
 - **Solution:** Use only one server instance per database, or enable WAL mode (automatic)
 
 **Problem:** High memory usage during uploads
+
 - **Cause:** Large file uploads
 - **Solution:** Adjust `MAX_UPLOAD_FILE_SIZE` or add more RAM
 
 **Problem:** Slow image processing
+
 - **Cause:** libvips not installed
 - **Solution:** Install libvips development libraries
 
 **Problem:** Files not found after restart
+
 - **Cause:** Data directory not persistent
 - **Solution:** Use Docker volumes or ensure data directory is mounted
 
