@@ -48,7 +48,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/v2/images/", s.HandleImage)
 
 	mux.HandleFunc("/docs/", httpSwagger.WrapHandler)
-	return mux
+
+	// Wrap with metrics middleware
+	return MetricsMiddleware(mux)
 }
 
 // HandleUpload uploads a file and saves metadata
