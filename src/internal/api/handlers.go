@@ -722,7 +722,7 @@ func (s *Server) HandleV2FileInfoByOldID(w http.ResponseWriter, r *http.Request)
 // @Success 200 {object} map[string]string
 // @Router /health [get]
 func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	s.HandleHealth(w, r)
+	s.HandleHealthFunc(w, r)
 }
 
 // b2bc6ec1-4e1b-474c-b423-10f9b3087fd6 - PDF
