@@ -398,16 +398,24 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for complete production deployment guide incl
 
 ## Usage
 
+### Admin Web Interface
+
+🖥️ **Web-based administration:** Access the admin interface at `http://localhost:8800/admin` (default: admin/admin)
+
+Features: real-time statistics, volume management, compaction, integrity checks, and job monitoring. See [ADMIN.md](ADMIN.md) for details.
+
 ### API Endpoints
 
 Cumulus3 provides a RESTful API for all operations. Complete API documentation is available via Swagger UI at `/docs/`.
 
 #### Endpoint Categories
 
+- **Admin UI** (`/admin`) - Web-based management interface
+- **System API** (`/system/*`) - Storage maintenance and statistics
 - **Base API** (`/base/*`) - Legacy compatibility endpoints
 - **Files API** (`/v2/files/*`) - Main file operations
 - **Images API** (`/v2/images/*`) - Image processing and thumbnails
-- **System API** (`/health`, `/metrics`) - System status and monitoring
+- **Health & Metrics** (`/health`, `/metrics`) - System status and monitoring
 
 ### File Upload
 
