@@ -109,18 +109,10 @@ func (s *Server) HandleSystemStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get storage stats
-	totalSize, deletedSize, err := s.FileService.MetaStore.GetStorageStats()
-	if err != nil {
-		utils.Error("SYSTEM", "Failed to get storage stats: %v", err)
-		http.Error(w, "Failed to get stats", http.StatusInternalServerError)
-		return
-	}
-
 	// Get blob count and total size
 	var blobCount int64
 	var blobTotalSize, blobRawSize int64
-	err = s.FileService.MetaStore.GetDB().QueryRow(`
+	err := s.FileService.MetaStore.GetDB().QueryRow(`
 		SELECT COUNT(*), COALESCE(SUM(size_compressed), 0), COALESCE(SUM(size_raw), 0)
 		FROM blobs
 	`).Scan(&blobCount, &blobTotalSize, &blobRawSize)
@@ -151,6 +143,24 @@ func (s *Server) HandleSystemStats(w http.ResponseWriter, r *http.Request) {
 		compressionRatio = (1.0 - float64(blobTotalSize)/float64(blobRawSize)) * 100
 	}
 
+	// Calculate deleted blobs size (blobs not referenced by any files)
+	var deletedBlobsSize int64
+	err = s.FileService.MetaStore.GetDB().QueryRow(`
+		SELECT COALESCE(SUM(b.size_compressed), 0)
+		FROM blobs b
+		LEFT JOIN files f ON b.id = f.blob_id
+		WHERE f.blob_id IS NULL
+	`).Scan(&deletedBlobsSize)
+	if err != nil {
+		utils.Error("SYSTEM", "Failed to get deleted blobs stats: %v", err)
+		deletedBlobsSize = 0
+	}
+
+	fragmentationRatio := 0.0
+	if blobTotalSize > 0 {
+		fragmentationRatio = float64(deletedBlobsSize) / float64(blobTotalSize) * 100
+	}
+
 	stats := map[string]interface{}{
 		"blobs": map[string]interface{}{
 			"count":            blobCount,
@@ -164,10 +174,10 @@ func (s *Server) HandleSystemStats(w http.ResponseWriter, r *http.Request) {
 			"deduplicationRatio": deduplicationRatio,
 		},
 		"storage": map[string]interface{}{
-			"totalSize":          totalSize,
-			"deletedSize":        deletedSize,
-			"usedSize":           totalSize - deletedSize,
-			"fragmentationRatio": float64(deletedSize) / float64(totalSize) * 100,
+			"totalSize":          blobTotalSize,
+			"deletedSize":        deletedBlobsSize,
+			"usedSize":           blobTotalSize - deletedBlobsSize,
+			"fragmentationRatio": fragmentationRatio,
 		},
 	}
 
