@@ -100,6 +100,78 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// normalizePath converts paths with IDs to normalized patterns
+func normalizePath(path string) string {
+	// Replace UUID patterns (8-4-4-4-12 hex format)
+	if len(path) > 36 {
+		// Match UUID pattern in path
+		for i := 0; i < len(path)-36; i++ {
+			segment := path[i : i+36]
+			// Simple UUID check: contains dashes at positions 8, 13, 18, 23
+			if len(segment) == 36 && segment[8] == '-' && segment[13] == '-' &&
+				segment[18] == '-' && segment[23] == '-' {
+				path = path[:i] + ":uuid" + path[i+36:]
+				break
+			}
+		}
+	}
+
+	// Replace numeric IDs in common patterns
+	// /base/files/id/12345 -> /base/files/id/:id
+	// /v2/files/old/12345 -> /v2/files/old/:id
+	parts := []string{}
+	for _, part := range splitPath(path) {
+		if isNumeric(part) {
+			parts = append(parts, ":id")
+		} else {
+			parts = append(parts, part)
+		}
+	}
+	return joinPath(parts)
+}
+
+func splitPath(path string) []string {
+	parts := []string{}
+	current := ""
+	for _, c := range path {
+		if c == '/' {
+			if current != "" {
+				parts = append(parts, current)
+				current = ""
+			}
+		} else {
+			current += string(c)
+		}
+	}
+	if current != "" {
+		parts = append(parts, current)
+	}
+	return parts
+}
+
+func joinPath(parts []string) string {
+	if len(parts) == 0 {
+		return "/"
+	}
+	result := ""
+	for _, part := range parts {
+		result += "/" + part
+	}
+	return result
+}
+
+func isNumeric(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // MetricsMiddleware measures HTTP request metrics
 func MetricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -119,10 +191,10 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(rw, r)
 
 		duration := time.Since(start).Seconds()
-		path := r.URL.Path
+		normalizedPath := normalizePath(r.URL.Path)
 
-		// Record metrics
-		httpRequestsTotal.WithLabelValues(r.Method, path, strconv.Itoa(rw.statusCode)).Inc()
-		httpRequestDuration.WithLabelValues(r.Method, path).Observe(duration)
+		// Record metrics with normalized path
+		httpRequestsTotal.WithLabelValues(r.Method, normalizedPath, strconv.Itoa(rw.statusCode)).Inc()
+		httpRequestDuration.WithLabelValues(r.Method, normalizedPath).Observe(duration)
 	})
 }
