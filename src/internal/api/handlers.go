@@ -147,6 +147,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	uploadOpsTotal.WithLabelValues("success", fileTypeLabel).Inc()
+	RecordBlobBytesWritten(header.Size)
 	if isDedup {
 		dedupHitsTotal.Inc()
 	}
@@ -211,6 +212,7 @@ func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Write(data)
+	RecordBlobBytesRead(len(data))
 	utils.Info("DOWNLOAD", " SUCCESS: file_id=%s, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
 }
 
@@ -325,6 +327,7 @@ func (s *Server) HandleDownloadByOldID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Write(data)
+	RecordBlobBytesRead(len(data))
 	utils.Info("DOWNLOAD_OLD_ID", " SUCCESS: old_id=%d, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
 }
 
@@ -638,6 +641,7 @@ func (s *Server) HandleTempDownloadByOldID(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Write(data)
+	RecordBlobBytesRead(len(data))
 	utils.Info("DOWNLOAD_OLD_ID", " SUCCESS: old_id=%d, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
 }
 

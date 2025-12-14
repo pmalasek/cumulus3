@@ -70,6 +70,21 @@ var (
 			Help: "Total bytes in storage volumes.",
 		},
 	)
+
+	// BLOB I/O metriky
+	blobBytesWritten = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "blob_bytes_written_total",
+			Help: "Total bytes written to BLOB storage.",
+		},
+	)
+
+	blobBytesRead = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "blob_bytes_read_total",
+			Help: "Total bytes read from BLOB storage.",
+		},
+	)
 )
 
 func init() {
@@ -81,12 +96,24 @@ func init() {
 	prometheus.MustRegister(dedupHitsTotal)
 	prometheus.MustRegister(storageDeletedBytes)
 	prometheus.MustRegister(storageTotalBytes)
+	prometheus.MustRegister(blobBytesWritten)
+	prometheus.MustRegister(blobBytesRead)
 }
 
 // UpdateStorageMetrics updates the storage size metrics
 func UpdateStorageMetrics(total, deleted int64) {
 	storageTotalBytes.Set(float64(total))
 	storageDeletedBytes.Set(float64(deleted))
+}
+
+// RecordBlobBytesWritten records bytes written to BLOB storage
+func RecordBlobBytesWritten(bytes int64) {
+	blobBytesWritten.Add(float64(bytes))
+}
+
+// RecordBlobBytesRead records bytes read from BLOB storage
+func RecordBlobBytesRead(bytes int) {
+	blobBytesRead.Add(float64(bytes))
 }
 
 // responseWriter wraps http.ResponseWriter to capture status code
