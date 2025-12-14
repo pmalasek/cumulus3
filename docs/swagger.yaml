@@ -140,7 +140,7 @@ paths:
       summary: Get file info
       tags:
       - 01 - Base (internal)
-  /base/files/old/id/{cumulus_id}:
+  /base/files/old/{cumulus_id}:
     get:
       description: Downloads a file by its old Cumulus ID
       parameters:

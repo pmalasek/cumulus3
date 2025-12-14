@@ -594,7 +594,7 @@ For migration from old Cumulus versions:
 **Download by old ID:**
 
 ```bash
-curl http://localhost:8800/base/files/id/12345
+curl http://localhost:8800/base/files/old/12345
 ```
 
 **Metadata by old ID:**
@@ -933,7 +933,7 @@ Cumulus3 supports gradual migration:
 2. **Access by old ID:**
 
    ```bash
-   curl http://localhost:8800/base/files/id/12345
+   curl http://localhost:8800/base/files/old/12345
    ```
 
 3. **Dual access** works simultaneously (UUID and old ID)

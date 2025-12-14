@@ -395,7 +395,7 @@ func testFile(client *http.Client, apiHost string, apiPort int, filesPath string
 	oldHash := calculateHash(oldData)
 
 	// Call API to get file from new Cumulus
-	apiURL := fmt.Sprintf("http://%s:%d/base/files/id/%d", apiHost, apiPort, mFile.FID)
+	apiURL := fmt.Sprintf("http://%s:%d/base/files/old/%d", apiHost, apiPort, mFile.FID)
 	resp, err := client.Get(apiURL)
 	if err != nil {
 		return &TestMismatch{

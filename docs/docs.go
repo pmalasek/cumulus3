@@ -110,47 +110,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/base/files/old/id/{cumulus_id}": {
-            "get": {
-                "description": "Downloads a file by its old Cumulus ID",
-                "produces": [
-                    "application/octet-stream"
-                ],
-                "tags": [
-                    "01 - Base (internal)"
-                ],
-                "summary": "Download a file by old ID",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "Old Cumulus ID",
-                        "name": "cumulus_id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "File content",
-                        "schema": {
-                            "type": "file"
-                        }
-                    },
-                    "404": {
-                        "description": "File not found",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            }
-        },
         "/base/files/old/info/{cumulus_id}": {
             "get": {
                 "description": "Get detailed information about a file by its old Cumulus ID",
@@ -187,6 +146,47 @@ const docTemplate = `{
                         "description": "Bad Request",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/base/files/old/{cumulus_id}": {
+            "get": {
+                "description": "Downloads a file by its old Cumulus ID",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "01 - Base (internal)"
+                ],
+                "summary": "Download a file by old ID",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Old Cumulus ID",
+                        "name": "cumulus_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "File content",
+                        "schema": {
+                            "type": "file"
                         }
                     },
                     "404": {
