@@ -495,11 +495,19 @@ func (s *Server) performDeepIntegrityCheck(job *Job) {
 	}
 	result["missingVolumes"] = missingVolumes
 
-	// Check blob readability (sample check - read first 100 bytes of each blob)
-	globalJobManager.UpdateJob(job.ID, JobStatusRunning, "Verifying blob readability", nil)
+	// Get total blob count for progress reporting
+	var totalBlobCount int64
+	err = s.FileService.MetaStore.GetDB().QueryRow(`SELECT COUNT(*) FROM blobs`).Scan(&totalBlobCount)
+	if err != nil {
+		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
+		return
+	}
+
+	// Check blob readability (read first 100 bytes of each blob to verify it's accessible)
+	globalJobManager.UpdateJob(job.ID, JobStatusRunning, fmt.Sprintf("Verifying blob readability (0/%d)", totalBlobCount), nil)
 
 	blobRows, err := s.FileService.MetaStore.GetDB().Query(`
-		SELECT id, volume_id, offset, size_compressed FROM blobs ORDER BY volume_id, offset LIMIT 1000
+		SELECT id, volume_id, offset, size_compressed FROM blobs ORDER BY volume_id, offset
 	`)
 	if err != nil {
 		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
@@ -521,8 +529,9 @@ func (s *Server) performDeepIntegrityCheck(job *Job) {
 
 		totalChecked++
 		if totalChecked%100 == 0 {
+			percentage := float64(totalChecked) / float64(totalBlobCount) * 100
 			globalJobManager.UpdateJob(job.ID, JobStatusRunning,
-				fmt.Sprintf("Checked %d/%d blobs", totalChecked, 1000), nil)
+				fmt.Sprintf("Checked %d/%d blobs (%.1f%%)", totalChecked, totalBlobCount, percentage), nil)
 		}
 
 		// Open volume file if needed
