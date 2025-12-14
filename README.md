@@ -31,6 +31,8 @@ It is a modern implementation inspired by the **SeaweedFS** architecture (based 
 
 ## Overview
 
+![Grafana Dashboard](img/grafana.png)
+
 Cumulus3 is an object storage system specifically optimized for handling large volumes of small files (images, documents, media). Traditional file systems suffer from significant performance degradation when dealing with millions of small files due to:
 
 - **Inode exhaustion** - limited number of files per volume
