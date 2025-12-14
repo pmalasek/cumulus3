@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"compress/bzip2"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -27,6 +30,15 @@ type MigrationFile struct {
 	RawID       int64
 	Tags        string
 	ContentType string
+}
+
+type TestMismatch struct {
+	CumulusID int64  `json:"cumulus_id"`
+	Filename  string `json:"filename"`
+	Status    string `json:"status"` // "missing", "hash_mismatch"
+	OldHash   string `json:"old_hash,omitempty"`
+	NewHash   string `json:"new_hash,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 func main() {
@@ -80,6 +92,7 @@ func main() {
 	apiPort := flag.Int("api-port", 8080, "Cumulus API port")
 	workers := flag.Int("workers", 10, "Number of parallel workers")
 	limit := flag.Int("limit", 10000, "Maximum number of files to migrate")
+	testOnly := flag.Bool("test-only", false, "Test mode: compare old and new Cumulus without migration")
 
 	flag.Parse()
 
@@ -163,7 +176,11 @@ func main() {
 	rows.Close()
 	db.Close() // Close DB connection immediately after reading
 
-	log.Printf("Loaded %d files to migrate. Starting migration with %d workers...", len(filesToMigrate), *workers)
+	if *testOnly {
+		log.Printf("Loaded %d files to test. Starting test mode with %d workers...", len(filesToMigrate), *workers)
+	} else {
+		log.Printf("Loaded %d files to migrate. Starting migration with %d workers...", len(filesToMigrate), *workers)
+	}
 
 	// Create HTTP client with connection pooling
 	httpClient := &http.Client{
@@ -181,6 +198,8 @@ func main() {
 		errorCount   int64
 		wg           sync.WaitGroup
 		jobs         = make(chan MigrationFile, *workers*2)
+		mismatches   []TestMismatch
+		mismatchMux  sync.Mutex
 	)
 
 	// Start workers
@@ -189,12 +208,25 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 			for mFile := range jobs {
-				if err := migrateFile(httpClient, apiURL, *filesPath, mFile); err != nil {
-					log.Printf("[Worker %d] ERROR: %s (ID: %d) - %v", workerID, mFile.Filename, mFile.FID, err)
-					atomic.AddInt64(&errorCount, 1)
+				if *testOnly {
+					if mismatch := testFile(httpClient, *apiHost, *apiPort, *filesPath, mFile); mismatch != nil {
+						mismatchMux.Lock()
+						mismatches = append(mismatches, *mismatch)
+						mismatchMux.Unlock()
+						log.Printf("[Worker %d] MISMATCH: %s (ID: %d) - %s", workerID, mFile.Filename, mFile.FID, mismatch.Status)
+						atomic.AddInt64(&errorCount, 1)
+					} else {
+						log.Printf("[Worker %d] MATCH: %s (ID: %d)", workerID, mFile.Filename, mFile.FID)
+						atomic.AddInt64(&successCount, 1)
+					}
 				} else {
-					log.Printf("[Worker %d] SUCCESS: %s (ID: %d)", workerID, mFile.Filename, mFile.FID)
-					atomic.AddInt64(&successCount, 1)
+					if err := migrateFile(httpClient, apiURL, *filesPath, mFile); err != nil {
+						log.Printf("[Worker %d] ERROR: %s (ID: %d) - %v", workerID, mFile.Filename, mFile.FID, err)
+						atomic.AddInt64(&errorCount, 1)
+					} else {
+						log.Printf("[Worker %d] SUCCESS: %s (ID: %d)", workerID, mFile.Filename, mFile.FID)
+						atomic.AddInt64(&successCount, 1)
+					}
 				}
 			}
 		}(i)
@@ -211,8 +243,26 @@ func main() {
 	wg.Wait()
 
 	elapsed := time.Since(startTime)
-	log.Printf("Migration completed in %s. Success: %d, Errors: %d, Total: %d",
-		elapsed, successCount, errorCount, len(filesToMigrate))
+
+	if *testOnly {
+		log.Printf("Test completed in %s. Matches: %d, Mismatches: %d, Total: %d",
+			elapsed, successCount, errorCount, len(filesToMigrate))
+
+		// Write mismatches to JSON file
+		if len(mismatches) > 0 {
+			outputFile := fmt.Sprintf("mismatches_%s.json", time.Now().Format("20060102_150405"))
+			if err := saveMismatchesToJSON(mismatches, outputFile); err != nil {
+				log.Printf("Error saving mismatches to JSON: %v", err)
+			} else {
+				log.Printf("Mismatches saved to: %s", outputFile)
+			}
+		} else {
+			log.Printf("No mismatches found! All files match.")
+		}
+	} else {
+		log.Printf("Migration completed in %s. Success: %d, Errors: %d, Total: %d",
+			elapsed, successCount, errorCount, len(filesToMigrate))
+	}
 }
 
 func roundToThousands(num int64) int64 {
@@ -296,6 +346,138 @@ func migrateFile(client *http.Client, apiURL, filesPath string, mFile MigrationF
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
+}
+
+// testFile compares file from old Cumulus with new Cumulus via API
+func testFile(client *http.Client, apiHost string, apiPort int, filesPath string, mFile MigrationFile) *TestMismatch {
+	// Load and decompress old file
+	roundedID := roundToThousands(mFile.RawID)
+	inputFileName := getInputFileName(mFile.RawID)
+	fullPath := filepath.Join(filesPath, fmt.Sprintf("%d", roundedID), inputFileName)
+
+	// Check if source file exists
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		return &TestMismatch{
+			CumulusID: mFile.FID,
+			Filename:  mFile.Filename,
+			Status:    "missing",
+			Error:     fmt.Sprintf("source file not found: %s", fullPath),
+		}
+	}
+
+	// Read and decompress file
+	file, err := os.Open(fullPath)
+	if err != nil {
+		return &TestMismatch{
+			CumulusID: mFile.FID,
+			Filename:  mFile.Filename,
+			Status:    "missing",
+			Error:     fmt.Sprintf("error opening file: %v", err),
+		}
+	}
+	defer file.Close()
+
+	bz2Reader := bzip2.NewReader(file)
+	oldData, err := io.ReadAll(bz2Reader)
+	if err != nil {
+		return &TestMismatch{
+			CumulusID: mFile.FID,
+			Filename:  mFile.Filename,
+			Status:    "missing",
+			Error:     fmt.Sprintf("error decompressing file: %v", err),
+		}
+	}
+
+	// Calculate old file hash
+	oldHash := calculateHash(oldData)
+
+	// Call API to get file from new Cumulus
+	apiURL := fmt.Sprintf("http://%s:%d/base/files/id/%d", apiHost, apiPort, mFile.FID)
+	resp, err := client.Get(apiURL)
+	if err != nil {
+		return &TestMismatch{
+			CumulusID: mFile.FID,
+			Filename:  mFile.Filename,
+			Status:    "missing",
+			OldHash:   oldHash,
+			Error:     fmt.Sprintf("API error: %v", err),
+		}
+	}
+	defer resp.Body.Close()
+
+	// Check if file exists in new Cumulus
+	if resp.StatusCode == http.StatusNotFound {
+		return &TestMismatch{
+			CumulusID: mFile.FID,
+			Filename:  mFile.Filename,
+			Status:    "missing",
+			OldHash:   oldHash,
+			Error:     "file not found in new Cumulus",
+		}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return &TestMismatch{
+			CumulusID: mFile.FID,
+			Filename:  mFile.Filename,
+			Status:    "missing",
+			OldHash:   oldHash,
+			Error:     fmt.Sprintf("API returned status %d", resp.StatusCode),
+		}
+	}
+
+	// Read new file data
+	newData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return &TestMismatch{
+			CumulusID: mFile.FID,
+			Filename:  mFile.Filename,
+			Status:    "missing",
+			OldHash:   oldHash,
+			Error:     fmt.Sprintf("error reading API response: %v", err),
+		}
+	}
+
+	// Calculate new file hash
+	newHash := calculateHash(newData)
+
+	// Compare hashes
+	if oldHash != newHash {
+		return &TestMismatch{
+			CumulusID: mFile.FID,
+			Filename:  mFile.Filename,
+			Status:    "hash_mismatch",
+			OldHash:   oldHash,
+			NewHash:   newHash,
+		}
+	}
+
+	// Files match
+	return nil
+}
+
+// calculateHash computes SHA-256 hash of data
+func calculateHash(data []byte) string {
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
+}
+
+// saveMismatchesToJSON saves mismatches to a JSON file
+func saveMismatchesToJSON(mismatches []TestMismatch, filename string) error {
+	data, err := json.MarshalIndent(map[string]interface{}{
+		"timestamp":        time.Now().Format(time.RFC3339),
+		"total_mismatches": len(mismatches),
+		"mismatches":       mismatches,
+	}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("error marshaling JSON: %w", err)
+	}
+
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("error writing file: %w", err)
 	}
 
 	return nil
