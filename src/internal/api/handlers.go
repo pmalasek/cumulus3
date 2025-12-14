@@ -35,17 +35,23 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/health", s.HandleHealth)
 	mux.Handle("/metrics", promhttp.Handler())
 
-	mux.HandleFunc("/base/files/id/", s.HandleDownloadByOldID)
-	mux.HandleFunc("/base/files/info/", s.HandleFileInfoByOldID)
-	mux.HandleFunc("/base/files/delete/", s.HandleDelete)
+	mux.HandleFunc("/base/files/old/id/", s.HandleBaseDownloadByOldID)
+	mux.HandleFunc("/base/files/old/info/", s.HandleBaseFileInfoByOldID)
+	mux.HandleFunc("/base/files/delete/", s.HandleBaseDelete)
+	mux.HandleFunc("/base/files/delete", s.HandleBaseDelete)
+	mux.HandleFunc("/base/files/", s.HandleBaseDownload)
+	mux.HandleFunc("/base/files/upload/", s.HandleBaseUpload)
+	mux.HandleFunc("/base/files/upload", s.HandleBaseUpload)
+	mux.HandleFunc("/base/files/info/", s.HandleBaseFileInfo)
 
-	mux.HandleFunc("/v2/files/upload", s.HandleUpload)
-	mux.HandleFunc("/v2/files/", s.HandleDownload)
-	mux.HandleFunc("/v2/files/info/", s.HandleFileInfo)
-	mux.HandleFunc("/v2/files/old/", s.HandleTempDownloadByOldID)
-	mux.HandleFunc("/v2/files/old/info/", s.HandleTempFileInfoByOldID)
+	mux.HandleFunc("/v2/files/upload/", s.HandleV2Upload)
+	mux.HandleFunc("/v2/files/upload", s.HandleV2Upload)
+	mux.HandleFunc("/v2/files/", s.HandleV2Download)
+	mux.HandleFunc("/v2/files/info/", s.HandleV2FileInfo)
+	mux.HandleFunc("/v2/files/old/", s.HandleV2DownloadByOldID)
+	mux.HandleFunc("/v2/files/old/info/", s.HandleV2FileInfoByOldID)
 
-	mux.HandleFunc("/v2/images/", s.HandleImage)
+	mux.HandleFunc("/v2/images/", s.HandleV2Image)
 
 	mux.HandleFunc("/docs/", httpSwagger.WrapHandler)
 
@@ -65,22 +71,9 @@ func (s *Server) Routes() http.Handler {
 	return MetricsMiddleware(mux)
 }
 
-// HandleUpload uploads a file and saves metadata
-// @Summary Upload a file
-// @Description Uploads a file to the storage
-// @Tags 02 - Files
-// @Accept multipart/form-data
-// @Produce json
-// @Param file formData file true "File to upload"
-// @Param tags formData string false "Tags like array of string or coma separated strings"
-// @Param old_cumulus_id formData int false "Legacy ID"
-// @Param validity formData string false "Validity period (e.g. '1 day', '2 months')"
-// @Success 201 {object} UploadResponse "File uploaded successfully, returns file UUID"
-// @Failure 400 {string} string "Bad Request"
-// @Failure 413 {string} string "File too large"
-// @Failure 500 {string} string "Internal Server Error"
-// @Router /v2/files/upload [post]
-func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
+// **********************************************************************************************************
+
+func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 	timer := prometheus.NewTimer(uploadDuration)
 	defer timer.ObserveDuration()
 
@@ -170,17 +163,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"fileID": fileID})
 }
 
-// HandleDownload downloads a file
-// @Summary Download a file
-// @Description Downloads a file by its UUID
-// @Tags 02 - Files
-// @Produce octet-stream
-// @Param uuid path string true "File UUID"
-// @Success 200 {file} file "File content"
-// @Failure 404 {string} string "File not found"
-// @Failure 500 {string} string "Internal Server Error"
-// @Router /v2/files/{uuid} [get]
-func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleDownloadFunc(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -188,7 +171,7 @@ func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 
 	// Extract ID from URL
 	// URL is /v2/files/{id}
-	id := strings.TrimPrefix(r.URL.Path, "/v2/files/")
+	id := strings.TrimPrefix(r.URL.Path, path)
 	if id == "" || id == "/" {
 		utils.Info("DOWNLOAD", " Missing file ID from %s", r.RemoteAddr)
 		http.Error(w, "Missing file ID", http.StatusBadRequest)
@@ -228,76 +211,13 @@ func (s *Server) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	utils.Info("DOWNLOAD", " SUCCESS: file_id=%s, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
 }
 
-// HandleFileInfo retrieves file information
-// @Summary Get file info
-// @Description Get detailed information about a file
-// @Tags 02 - Files
-// @Produce json
-// @Param uuid path string true "File UUID"
-// @Param extended query boolean false "Include base64 content"
-// @Success 200 {object} service.FileInfo
-// @Failure 400 {string} string "Bad Request"
-// @Failure 404 {string} string "File not found"
-// @Failure 500 {string} string "Internal Server Error"
-// @Router /v2/files/info/{uuid} [get]
-func (s *Server) HandleFileInfo(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleDownloadByOldIDFunc(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	fileID := strings.TrimPrefix(r.URL.Path, "/v2/files/info/")
-	if fileID == "" || fileID == "/" {
-		utils.Info("FILE_INFO", " Missing file ID from %s", r.RemoteAddr)
-		http.Error(w, "Missing file ID", http.StatusBadRequest)
-		return
-	}
-
-	extendedStr := r.URL.Query().Get("extended")
-	extended := false
-	if extendedStr != "" {
-		var err error
-		extended, err = strconv.ParseBool(extendedStr)
-		if err != nil {
-			http.Error(w, "Invalid extended parameter", http.StatusBadRequest)
-			return
-		}
-	}
-
-	info, err := s.FileService.GetFileInfo(fileID, extended)
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			utils.Info("FILE_INFO", " File not found: file_id=%s, remote=%s", fileID, r.RemoteAddr)
-			http.Error(w, "File not found", http.StatusNotFound)
-			return
-		}
-		utils.Info("FILE_INFO", " ERROR: file_id=%s, remote=%s, error=%v", fileID, r.RemoteAddr, err)
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	utils.Info("FILE_INFO", " SUCCESS: file_id=%s, extended=%v, remote=%s", fileID, extended, r.RemoteAddr)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(info)
-}
-
-// HandleDownloadByOldID downloads a file by its old Cumulus ID
-// @Summary Download a file by old ID
-// @Description Downloads a file by its old Cumulus ID
-// @Tags 01 - Base (internal)
-// @Produce octet-stream
-// @Param cumulus_id path int true "Old Cumulus ID"
-// @Success 200 {file} file "File content"
-// @Failure 404 {string} string "File not found"
-// @Failure 500 {string} string "Internal Server Error"
-// @Router /base/files/id/{cumulus_id} [get]
-func (s *Server) HandleDownloadByOldID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	idStr := strings.TrimPrefix(r.URL.Path, "/base/files/id/")
+	utils.Info("TEMP_DOWNLOAD_OLD_ID", " Handler invoked from %s", r.URL.Path)
+	idStr := strings.TrimPrefix(r.URL.Path, path)
 	if idStr == "" || idStr == "/" {
 		http.Error(w, "Missing file ID", http.StatusBadRequest)
 		return
@@ -343,25 +263,54 @@ func (s *Server) HandleDownloadByOldID(w http.ResponseWriter, r *http.Request) {
 	utils.Info("DOWNLOAD_OLD_ID", " SUCCESS: old_id=%d, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
 }
 
-// HandleFileInfoByOldID retrieves file information by old Cumulus ID
-// @Summary Get file info by old ID
-// @Description Get detailed information about a file by its old Cumulus ID
-// @Tags 01 - Base (internal)
-// @Produce json
-// @Param cumulus_id path int true "Cumulus ID"
-// @Param extended query boolean false "Include base64 content"
-// @Success 200 {object} service.FileInfo
-// @Failure 400 {string} string "Bad Request"
-// @Failure 404 {string} string "File not found"
-// @Failure 500 {string} string "Internal Server Error"
-// @Router /base/files/info/{cumulus_id} [get]
-func (s *Server) HandleFileInfoByOldID(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleFileInfoFunc(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	idStr := strings.TrimPrefix(r.URL.Path, "/base/files/info/")
+	fileID := strings.TrimPrefix(r.URL.Path, path)
+	if fileID == "" || fileID == "/" {
+		utils.Info("FILE_INFO", " Missing file ID from %s", r.RemoteAddr)
+		http.Error(w, "Missing file ID", http.StatusBadRequest)
+		return
+	}
+
+	extendedStr := r.URL.Query().Get("extended")
+	extended := false
+	if extendedStr != "" {
+		var err error
+		extended, err = strconv.ParseBool(extendedStr)
+		if err != nil {
+			http.Error(w, "Invalid extended parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
+	info, err := s.FileService.GetFileInfo(fileID, extended)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			utils.Info("FILE_INFO", " File not found: file_id=%s, remote=%s", fileID, r.RemoteAddr)
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+		utils.Info("FILE_INFO", " ERROR: file_id=%s, remote=%s, error=%v", fileID, r.RemoteAddr, err)
+		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	utils.Info("FILE_INFO", " SUCCESS: file_id=%s, extended=%v, remote=%s", fileID, extended, r.RemoteAddr)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
+}
+
+func (s *Server) HandleFileInfoByOldIDFunc(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	idStr := strings.TrimPrefix(r.URL.Path, path)
 	if idStr == "" || idStr == "/" {
 		http.Error(w, "Missing file ID", http.StatusBadRequest)
 		return
@@ -398,22 +347,13 @@ func (s *Server) HandleFileInfoByOldID(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(info)
 }
 
-// HandleDelete deletes a file
-// @Summary Delete a file
-// @Description Deletes a file by its File UUID
-// @Tags 01 - Base (internal)
-// @Param uuid path string true "File UUID"
-// @Success 200 {string} string "File deleted successfully"
-// @Failure 400 {string} string "Bad Request"
-// @Failure 500 {string} string "Internal Server Error"
-// @Router /base/files/delete/{uuid} [delete]
-func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleDeleteFunc(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	id := strings.TrimPrefix(r.URL.Path, "/base/files/delete/")
+	id := strings.TrimPrefix(r.URL.Path, path)
 	if id == "" {
 		utils.Info("DELETE", " Missing file ID from %s", r.RemoteAddr)
 		http.Error(w, "File ID is required", http.StatusBadRequest)
@@ -433,48 +373,15 @@ func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("File deleted successfully"))
 }
 
-// HandleHealth returns service health status
-// @Summary Health check
-// @Description Returns OK if service is healthy
-// @Tags 04 - System
-// @Produce json
-// @Success 200 {object} map[string]string
-// @Router /health [get]
-func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "ok",
-		"service": "cumulus3",
-	})
-}
-
-// HandleImage zpracuje požadavky na obrázky a jejich varianty
-// @Summary Get image or image variant
-// @Description Downloads original image or resized variant (thumb, sm, md, lg). For PDF files, generates thumbnail.
-// @Tags 03 - Images
-// @Produce image/jpeg,image/png
-// @Param uuid path string true "File UUID"
-// @Param variant path string false "Image variant: thumb, sm, md, lg (optional for original)"
-// @Success 200 {file} file "Image content"
-// @Failure 400 {string} string "Bad Request"
-// @Failure 404 {string} string "File not found"
-// @Failure 415 {string} string "Not an image or PDF"
-// @Failure 500 {string} string "Internal Server Error"
-// @Router /v2/images/{uuid} [get]
-// @Router /v2/images/{uuid}/thumb [get]
-// @Router /v2/images/{uuid}/sm [get]
-// @Router /v2/images/{uuid}/md [get]
-// @Router /v2/images/{uuid}/lg [get]
-func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleImageFunc(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	// Parse URL: /v2/images/{uuid} nebo /v2/images/{uuid}/{variant}
-	path := strings.TrimPrefix(r.URL.Path, "/v2/images/")
-	parts := strings.Split(path, "/")
+	urlPath := strings.TrimPrefix(r.URL.Path, path)
+	parts := strings.Split(urlPath, "/")
 
 	if len(parts) < 1 || parts[0] == "" {
 		utils.Info("IMAGE", " Missing UUID from %s", r.RemoteAddr)
@@ -595,7 +502,189 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// HandleTempDownloadByOldID downloads a file by its old CumulusID
+func (s *Server) HandleHealthFunc(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"service": "cumulus3",
+	})
+}
+
+// **********************************************************************************************************
+
+// **********************************************************************************************************
+// BASE
+// **********************************************************************************************************
+
+// BaseHandleDownloadByOldID downloads a file by its old Cumulus ID
+// @Summary Download a file by old ID
+// @Description Downloads a file by its old Cumulus ID
+// @Tags 01 - Base (internal)
+// @Produce octet-stream
+// @Param cumulus_id path int true "Old Cumulus ID"
+// @Success 200 {file} file "File content"
+// @Failure 404 {string} string "File not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /base/files/old/id/{cumulus_id} [get]
+func (s *Server) HandleBaseDownloadByOldID(w http.ResponseWriter, r *http.Request) {
+	s.HandleDownloadByOldIDFunc(w, r, "/base/files/old/id/")
+}
+
+// HandleFileInfoByOldID retrieves file information by old Cumulus ID
+// @Summary Get file info by old ID
+// @Description Get detailed information about a file by its old Cumulus ID
+// @Tags 01 - Base (internal)
+// @Produce json
+// @Param cumulus_id path int true "Cumulus ID"
+// @Param extended query boolean false "Include base64 content"
+// @Success 200 {object} service.FileInfo
+// @Failure 400 {string} string "Bad Request"
+// @Failure 404 {string} string "File not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /base/files/old/info/{cumulus_id} [get]
+func (s *Server) HandleBaseFileInfoByOldID(w http.ResponseWriter, r *http.Request) {
+	s.HandleFileInfoByOldIDFunc(w, r, "/base/files/old/info/")
+}
+
+// HandleDelete deletes a file
+// @Summary Delete a file
+// @Description Deletes a file by its File UUID
+// @Tags 01 - Base (internal)
+// @Param uuid path string true "File UUID"
+// @Success 200 {string} string "File deleted successfully"
+// @Failure 400 {string} string "Bad Request"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /base/files/delete/{uuid} [delete]
+func (s *Server) HandleBaseDelete(w http.ResponseWriter, r *http.Request) {
+	s.HandleDeleteFunc(w, r, "/base/files/")
+}
+
+// HandleUpload uploads a file and saves metadata
+// @Summary Upload a file
+// @Description Uploads a file to the storage
+// @Tags 01 - Base (internal)
+// @Accept multipart/form-data
+// @Produce json
+// @Param file formData file true "File to upload"
+// @Param tags formData string false "Tags like array of string or coma separated strings"
+// @Param old_cumulus_id formData int false "Legacy ID"
+// @Param validity formData string false "Validity period (e.g. '1 day', '2 months')"
+// @Success 201 {object} UploadResponse "File uploaded successfully, returns file UUID"
+// @Failure 400 {string} string "Bad Request"
+// @Failure 413 {string} string "File too large"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /base/files/upload [post]
+func (s *Server) HandleBaseUpload(w http.ResponseWriter, r *http.Request) {
+	utils.Info("MAIN", "Upload ... ")
+	s.HandleUploadFunc(w, r)
+}
+
+// HandleDownload downloads a file
+// @Summary Download a file
+// @Description Downloads a file by its UUID
+// @Tags 01 - Base (internal)
+// @Produce octet-stream
+// @Param uuid path string true "File UUID"
+// @Success 200 {file} file "File content"
+// @Failure 404 {string} string "File not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /base/files/{uuid} [get]
+func (s *Server) HandleBaseDownload(w http.ResponseWriter, r *http.Request) {
+	s.HandleDownloadFunc(w, r, "/base/files/")
+}
+
+// HandleFileInfo retrieves file information
+// @Summary Get file info
+// @Description Get detailed information about a file
+// @Tags 01 - Base (internal)
+// @Produce json
+// @Param uuid path string true "File UUID"
+// @Param extended query boolean false "Include base64 content"
+// @Success 200 {object} service.FileInfo
+// @Failure 400 {string} string "Bad Request"
+// @Failure 404 {string} string "File not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /base/files/info/{uuid} [get]
+func (s *Server) HandleBaseFileInfo(w http.ResponseWriter, r *http.Request) {
+	s.HandleFileInfoFunc(w, r, "/base/files/info/")
+}
+
+// **********************************************************************************************************
+// V2 API
+// **********************************************************************************************************
+
+// HandleUpload uploads a file and saves metadata
+// @Summary Upload a file
+// @Description Uploads a file to the storage
+// @Tags 02 - Files
+// @Accept multipart/form-data
+// @Produce json
+// @Param file formData file true "File to upload"
+// @Param tags formData string false "Tags like array of string or coma separated strings"
+// @Param old_cumulus_id formData int false "Legacy ID"
+// @Param validity formData string false "Validity period (e.g. '1 day', '2 months')"
+// @Success 201 {object} UploadResponse "File uploaded successfully, returns file UUID"
+// @Failure 400 {string} string "Bad Request"
+// @Failure 413 {string} string "File too large"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /v2/files/upload [post]
+func (s *Server) HandleV2Upload(w http.ResponseWriter, r *http.Request) {
+	s.HandleUploadFunc(w, r)
+}
+
+// HandleV2Download downloads a file
+// @Summary Download a file
+// @Description Downloads a file by its UUID
+// @Tags 02 - Files
+// @Produce octet-stream
+// @Param uuid path string true "File UUID"
+// @Success 200 {file} file "File content"
+// @Failure 404 {string} string "File not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /v2/files/{uuid} [get]
+func (s *Server) HandleV2Download(w http.ResponseWriter, r *http.Request) {
+	s.HandleDownloadFunc(w, r, "/v2/files/")
+}
+
+// HandleV2FileInfo retrieves file information
+// @Summary Get file info
+// @Description Get detailed information about a file
+// @Tags 02 - Files
+// @Produce json
+// @Param uuid path string true "File UUID"
+// @Param extended query boolean false "Include base64 content"
+// @Success 200 {object} service.FileInfo
+// @Failure 400 {string} string "Bad Request"
+// @Failure 404 {string} string "File not found"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /v2/files/info/{uuid} [get]
+func (s *Server) HandleV2FileInfo(w http.ResponseWriter, r *http.Request) {
+	s.HandleFileInfoFunc(w, r, "/v2/files/info/")
+}
+
+// HandleImage zpracuje požadavky na obrázky a jejich varianty
+// @Summary Get image or image variant
+// @Description Downloads original image or resized variant (thumb, sm, md, lg). For PDF files, generates thumbnail.
+// @Tags 03 - Images
+// @Produce image/jpeg,image/png
+// @Param uuid path string true "File UUID"
+// @Param variant path string false "Image variant: thumb, sm, md, lg (optional for original)"
+// @Success 200 {file} file "Image content"
+// @Failure 400 {string} string "Bad Request"
+// @Failure 404 {string} string "File not found"
+// @Failure 415 {string} string "Not an image or PDF"
+// @Failure 500 {string} string "Internal Server Error"
+// @Router /v2/images/{uuid} [get]
+// @Router /v2/images/{uuid}/thumb [get]
+// @Router /v2/images/{uuid}/sm [get]
+// @Router /v2/images/{uuid}/md [get]
+// @Router /v2/images/{uuid}/lg [get]
+func (s *Server) HandleV2Image(w http.ResponseWriter, r *http.Request) {
+	s.HandleImageFunc(w, r, "/v2/images/")
+}
+
+// HandleV2DownloadByOldID downloads a file by its old CumulusID
 // @Summary Download a file by old CumulusID
 // @Description Downloads a file by its old CumulusID
 // @Tags 02 - Files
@@ -605,56 +694,8 @@ func (s *Server) HandleImage(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /v2/files/old/{cumulus_id} [get]
-func (s *Server) HandleTempDownloadByOldID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	utils.Info("TEMP_DOWNLOAD_OLD_ID", " Handler invoked from %s", r.URL.Path)
-	idStr := strings.TrimPrefix(r.URL.Path, "/v2/files/old/")
-	if idStr == "" || idStr == "/" {
-		http.Error(w, "Missing file ID", http.StatusBadRequest)
-		return
-	}
-
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		utils.Info("DOWNLOAD_OLD_ID", " Invalid ID format: id=%s, remote=%s, error=%v", idStr, r.RemoteAddr, err)
-		http.Error(w, "Invalid file ID", http.StatusBadRequest)
-		return
-	}
-
-	utils.Info("DOWNLOAD_OLD_ID", " Requesting old_id=%d, remote=%s", id, r.RemoteAddr)
-	data, filename, mimeType, err := s.FileService.DownloadFileByOldID(id)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			utils.Info("DOWNLOAD_OLD_ID", " File not found: old_id=%d, remote=%s", id, r.RemoteAddr)
-			http.Error(w, "File not found", http.StatusNotFound)
-			return
-		}
-		utils.Info("DOWNLOAD_OLD_ID", " ERROR: old_id=%d, remote=%s, error=%v", id, r.RemoteAddr, err)
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", mimeType)
-	encodedFilename := url.PathEscape(filename)
-
-	// Determine disposition based on mime type
-	disposition := "attachment"
-	if strings.HasPrefix(mimeType, "image/") ||
-		strings.HasPrefix(mimeType, "video/") ||
-		strings.HasPrefix(mimeType, "audio/") ||
-		mimeType == "application/pdf" ||
-		mimeType == "text/plain" {
-		disposition = "inline"
-	}
-
-	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Write(data)
-	RecordBlobBytesRead(len(data))
-	utils.Info("DOWNLOAD_OLD_ID", " SUCCESS: old_id=%d, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
+func (s *Server) HandleV2DownloadByOldID(w http.ResponseWriter, r *http.Request) {
+	s.HandleDownloadByOldIDFunc(w, r, "/v2/files/old/")
 }
 
 // HandleFileInfo retrieves file information
@@ -669,45 +710,20 @@ func (s *Server) HandleTempDownloadByOldID(w http.ResponseWriter, r *http.Reques
 // @Failure 404 {string} string "File not found"
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /v2/files/old/info/{cumulus_id} [get]
-func (s *Server) HandleTempFileInfoByOldID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	idStr := strings.TrimPrefix(r.URL.Path, "/v2/files/old/info/")
-	if idStr == "" || idStr == "/" {
-		http.Error(w, "Missing file ID", http.StatusBadRequest)
-		return
-	}
-
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		http.Error(w, "Invalid file ID", http.StatusBadRequest)
-		return
-	}
-
-	extendedStr := r.URL.Query().Get("extended")
-	extended := false
-	if extendedStr != "" {
-		var err error
-		extended, err = strconv.ParseBool(extendedStr)
-		if err != nil {
-			http.Error(w, "Invalid extended parameter", http.StatusBadRequest)
-			return
-		}
-	}
-
-	info, err := s.FileService.GetFileInfoByOldID(id, extended)
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			http.Error(w, "File not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(info)
+func (s *Server) HandleV2FileInfoByOldID(w http.ResponseWriter, r *http.Request) {
+	s.HandleFileInfoByOldIDFunc(w, r, "/v2/files/old/info/")
 }
+
+// HandleHealth returns service health status
+// @Summary Health check
+// @Description Returns OK if service is healthy
+// @Tags 04 - System
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /health [get]
+func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	s.HandleHealth(w, r)
+}
+
+// b2bc6ec1-4e1b-474c-b423-10f9b3087fd6 - PDF
+// 069f5816-bdb3-4261-99b2-31e66a61c4b2 - Image

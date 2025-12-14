@@ -53,6 +53,33 @@ info:
   title: Cumulus3
   version: 3.0.1
 paths:
+  /base/files/{uuid}:
+    get:
+      description: Downloads a file by its UUID
+      parameters:
+      - description: File UUID
+        in: path
+        name: uuid
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: File content
+          schema:
+            type: file
+        "404":
+          description: File not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Download a file
+      tags:
+      - 01 - Base (internal)
   /base/files/delete/{uuid}:
     delete:
       description: Deletes a file by its File UUID
@@ -78,7 +105,42 @@ paths:
       summary: Delete a file
       tags:
       - 01 - Base (internal)
-  /base/files/id/{cumulus_id}:
+  /base/files/info/{uuid}:
+    get:
+      description: Get detailed information about a file
+      parameters:
+      - description: File UUID
+        in: path
+        name: uuid
+        required: true
+        type: string
+      - description: Include base64 content
+        in: query
+        name: extended
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.FileInfo'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "404":
+          description: File not found
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Get file info
+      tags:
+      - 01 - Base (internal)
+  /base/files/old/id/{cumulus_id}:
     get:
       description: Downloads a file by its old Cumulus ID
       parameters:
@@ -105,7 +167,7 @@ paths:
       summary: Download a file by old ID
       tags:
       - 01 - Base (internal)
-  /base/files/info/{cumulus_id}:
+  /base/files/old/info/{cumulus_id}:
     get:
       description: Get detailed information about a file by its old Cumulus ID
       parameters:
@@ -140,6 +202,51 @@ paths:
       summary: Get file info by old ID
       tags:
       - 01 - Base (internal)
+  /base/files/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Uploads a file to the storage
+      parameters:
+      - description: File to upload
+        in: formData
+        name: file
+        required: true
+        type: file
+      - description: Tags like array of string or coma separated strings
+        in: formData
+        name: tags
+        type: string
+      - description: Legacy ID
+        in: formData
+        name: old_cumulus_id
+        type: integer
+      - description: Validity period (e.g. '1 day', '2 months')
+        in: formData
+        name: validity
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: File uploaded successfully, returns file UUID
+          schema:
+            $ref: '#/definitions/api.UploadResponse'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "413":
+          description: File too large
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: Upload a file
+      tags:
+      - 01 - Base (internal)
   /health:
     get:
       description: Returns OK if service is healthy
@@ -153,6 +260,99 @@ paths:
               type: string
             type: object
       summary: Health check
+      tags:
+      - 04 - System
+  /system/compact:
+    post:
+      consumes:
+      - application/json
+      description: Starts asynchronous compaction of a specific volume or all volumes
+      parameters:
+      - description: 'Compact request (volumeId: int or ''all'': true)'
+        in: body
+        name: body
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Compact volume
+      tags:
+      - 04 - System
+  /system/integrity:
+    get:
+      description: Checks integrity of storage (blobs vs files). Use ?deep=true for
+        physical verification
+      parameters:
+      - description: Perform deep integrity check (verifies physical files)
+        in: query
+        name: deep
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Check storage integrity
+      tags:
+      - 04 - System
+  /system/jobs:
+    get:
+      description: Returns list of all jobs or specific job details
+      parameters:
+      - description: Job ID
+        in: query
+        name: id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get jobs status
+      tags:
+      - 04 - System
+  /system/stats:
+    get:
+      description: Returns statistics about storage, blobs, files, and deduplication
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get system statistics
+      tags:
+      - 04 - System
+  /system/volumes:
+    get:
+      description: Returns list of all volumes with their statistics
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      summary: Get volume list
       tags:
       - 04 - System
   /v2/files/{uuid}:

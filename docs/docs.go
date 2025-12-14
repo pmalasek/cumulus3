@@ -57,7 +57,60 @@ const docTemplate = `{
                 }
             }
         },
-        "/base/files/id/{cumulus_id}": {
+        "/base/files/info/{uuid}": {
+            "get": {
+                "description": "Get detailed information about a file",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "01 - Base (internal)"
+                ],
+                "summary": "Get file info",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "File UUID",
+                        "name": "uuid",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include base64 content",
+                        "name": "extended",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/service.FileInfo"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/base/files/old/id/{cumulus_id}": {
             "get": {
                 "description": "Downloads a file by its old Cumulus ID",
                 "produces": [
@@ -98,7 +151,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/base/files/info/{cumulus_id}": {
+        "/base/files/old/info/{cumulus_id}": {
             "get": {
                 "description": "Get detailed information about a file by its old Cumulus ID",
                 "produces": [
@@ -151,6 +204,115 @@ const docTemplate = `{
                 }
             }
         },
+        "/base/files/upload": {
+            "post": {
+                "description": "Uploads a file to the storage",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "01 - Base (internal)"
+                ],
+                "summary": "Upload a file",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "File to upload",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Tags like array of string or coma separated strings",
+                        "name": "tags",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Legacy ID",
+                        "name": "old_cumulus_id",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Validity period (e.g. '1 day', '2 months')",
+                        "name": "validity",
+                        "in": "formData"
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "File uploaded successfully, returns file UUID",
+                        "schema": {
+                            "$ref": "#/definitions/api.UploadResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "413": {
+                        "description": "File too large",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/base/files/{uuid}": {
+            "get": {
+                "description": "Downloads a file by its UUID",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "01 - Base (internal)"
+                ],
+                "summary": "Download a file",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "File UUID",
+                        "name": "uuid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "File content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "404": {
+                        "description": "File not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/health": {
             "get": {
                 "description": "Returns OK if service is healthy",
@@ -168,6 +330,145 @@ const docTemplate = `{
                             "type": "object",
                             "additionalProperties": {
                                 "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/system/compact": {
+            "post": {
+                "description": "Starts asynchronous compaction of a specific volume or all volumes",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "04 - System"
+                ],
+                "summary": "Compact volume",
+                "parameters": [
+                    {
+                        "description": "Compact request (volumeId: int or 'all': true)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/system/integrity": {
+            "get": {
+                "description": "Checks integrity of storage (blobs vs files). Use ?deep=true for physical verification",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "04 - System"
+                ],
+                "summary": "Check storage integrity",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "Perform deep integrity check (verifies physical files)",
+                        "name": "deep",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/system/jobs": {
+            "get": {
+                "description": "Returns list of all jobs or specific job details",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "04 - System"
+                ],
+                "summary": "Get jobs status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/system/stats": {
+            "get": {
+                "description": "Returns statistics about storage, blobs, files, and deduplication",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "04 - System"
+                ],
+                "summary": "Get system statistics",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/system/volumes": {
+            "get": {
+                "description": "Returns list of all volumes with their statistics",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "04 - System"
+                ],
+                "summary": "Get volume list",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": true
                             }
                         }
                     }
