@@ -489,7 +489,8 @@ func (s *Store) writeMetaRecord(metaPath string, blobID int64, offset int64, siz
 	return err
 }
 
-// regenerateMetaFile regenerates the .meta file after compaction with updated offsets
+// regenerateMetaFile regenerates the .meta file after compaction with updated offsets.
+// Reads the actual blob data from the volume file to compute correct CRC32 values.
 func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 	// Get all blobs for this volume from database (with correct offsets after compaction)
 	rows, err := meta.db.Query(`
@@ -512,8 +513,16 @@ func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 		legacyName := fmt.Sprintf("volume_%d.dat", volumeID)
 		if _, err := os.Stat(filepath.Join(s.BaseDir, legacyName)); err == nil {
 			filename = legacyName
+			fullPath = filepath.Join(s.BaseDir, filename)
 		}
 	}
+
+	// Open volume file once to compute proper CRC32 values for each blob
+	datFile, err := os.Open(fullPath)
+	if err != nil {
+		return fmt.Errorf("failed to open volume file for CRC computation: %w", err)
+	}
+	defer datFile.Close()
 
 	metaFilename := strings.TrimSuffix(filename, ".dat") + ".meta"
 	metaPath := filepath.Join(s.BaseDir, metaFilename)
@@ -524,6 +533,8 @@ func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 		return err
 	}
 	defer mf.Close()
+
+	dataBuf := make([]byte, 0, 64*1024) // reusable; grown as needed
 
 	// Write all blob records with updated offsets
 	for rows.Next() {
@@ -542,10 +553,16 @@ func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 			compAlgCode = 2
 		}
 
-		// We need to calculate CRC from the actual data
-		// For now, write 0 as CRC (recovery tool doesn't strictly need it)
-		// TODO: Could read data and calculate proper CRC if needed
-		crc := uint32(0)
+		// Read compressed data to compute real CRC32
+		if int64(cap(dataBuf)) < sizeCompressed {
+			dataBuf = make([]byte, sizeCompressed)
+		} else {
+			dataBuf = dataBuf[:sizeCompressed]
+		}
+		if _, err := datFile.ReadAt(dataBuf, offset+int64(HeaderSize)); err != nil {
+			return fmt.Errorf("failed to read blob %d for CRC: %w", blobID, err)
+		}
+		crc := crc32.ChecksumIEEE(dataBuf)
 
 		// Formát: BlobID(8) + Offset(8) + Size(8) + Comp(1) + CRC(4) = 29 bytes
 		metaRecord := make([]byte, 29)

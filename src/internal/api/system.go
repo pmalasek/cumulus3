@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pmalasek/cumulus3/src/internal/utils"
 )
 
@@ -47,13 +48,23 @@ func (jm *JobManager) CreateJob(jobType string, volumeID *int64) *Job {
 	defer jm.mu.Unlock()
 
 	job := &Job{
-		ID:        fmt.Sprintf("%s-%d", jobType, time.Now().Unix()),
+		ID:        uuid.New().String(),
 		Type:      jobType,
 		Status:    JobStatusPending,
 		VolumeID:  volumeID,
 		StartedAt: time.Now(),
 	}
 	jm.jobs[job.ID] = job
+
+	// Evict completed/failed jobs older than 1 hour to prevent unbounded memory growth.
+	cutoff := time.Now().Add(-1 * time.Hour)
+	for id, j := range jm.jobs {
+		if (j.Status == JobStatusCompleted || j.Status == JobStatusFailed) &&
+			j.CompletedAt != nil && j.CompletedAt.Before(cutoff) {
+			delete(jm.jobs, id)
+		}
+	}
+
 	return job
 }
 
