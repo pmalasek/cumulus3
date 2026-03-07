@@ -331,42 +331,28 @@ func (m *MetadataSQL) GetFileByOldID(oldID int64) (File, error) {
 	return f, nil
 }
 
-// FindFileByBlobAndName finds an existing file with the same blob_id, filename, old_cumulus_id, and expiresAt
+// FindFileByBlobAndName finds an existing file with the same blob_id, filename, old_cumulus_id, and expiresAt.
+// SQLite's IS operator provides null-safe equality, so a single query covers all four nil/non-nil combinations.
 func (m *MetadataSQL) FindFileByBlobAndName(blobID int64, filename string, oldCumulusID *int64, expiresAt *time.Time) (*File, error) {
-	var f File
-	var query string
-	var err error
-
-	// Build query based on oldCumulusID and expiresAt combinations
-	if oldCumulusID == nil && expiresAt == nil {
-		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
-		         FROM files 
-		         WHERE blob_id = ? AND name = ? AND old_cumulus_id IS NULL AND expires_at IS NULL
-		         LIMIT 1`
-		err = m.db.QueryRow(query, blobID, filename).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
-	} else if oldCumulusID == nil && expiresAt != nil {
-		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
-		         FROM files 
-		         WHERE blob_id = ? AND name = ? AND old_cumulus_id IS NULL AND expires_at = ?
-		         LIMIT 1`
-		err = m.db.QueryRow(query, blobID, filename, *expiresAt).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
-	} else if oldCumulusID != nil && expiresAt == nil {
-		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
-		         FROM files 
-		         WHERE blob_id = ? AND name = ? AND old_cumulus_id = ? AND expires_at IS NULL
-		         LIMIT 1`
-		err = m.db.QueryRow(query, blobID, filename, *oldCumulusID).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
-	} else {
-		// Both oldCumulusID and expiresAt are set
-		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
-		         FROM files 
-		         WHERE blob_id = ? AND name = ? AND old_cumulus_id = ? AND expires_at = ?
-		         LIMIT 1`
-		err = m.db.QueryRow(query, blobID, filename, *oldCumulusID, *expiresAt).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
+	var oldID any
+	if oldCumulusID != nil {
+		oldID = *oldCumulusID
+	}
+	var expAt any
+	if expiresAt != nil {
+		expAt = *expiresAt
 	}
 
+	const query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags
+	               FROM files
+	               WHERE blob_id = ? AND name = ? AND old_cumulus_id IS ? AND expires_at IS ?
+	               LIMIT 1`
+
+	var f File
+	err := m.db.QueryRow(query, blobID, filename, oldID, expAt).Scan(
+		&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
 	if err == sql.ErrNoRows {
-		return nil, nil // Not found
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err

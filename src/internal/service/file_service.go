@@ -97,135 +97,94 @@ func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, conte
 	return fileID, isDedup, err
 }
 
-// DownloadFile retrieves a file by its ID, handling decompression if necessary
+// decompressBlob decompresses raw blob bytes according to the stored compression algorithm.
+func decompressBlob(data []byte, alg string) ([]byte, error) {
+	switch alg {
+	case "gzip":
+		reader, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("gzip error: %w", err)
+		}
+		defer reader.Close()
+		out, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, fmt.Errorf("gzip read error: %w", err)
+		}
+		return out, nil
+	case "zstd":
+		decoder, err := zstd.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("zstd error: %w", err)
+		}
+		defer decoder.Close()
+		out, err := io.ReadAll(decoder)
+		if err != nil {
+			return nil, fmt.Errorf("zstd read error: %w", err)
+		}
+		return out, nil
+	case "none", "":
+		return data, nil
+	default:
+		return nil, fmt.Errorf("unknown compression algorithm: %s", alg)
+	}
+}
+
+// downloadFileRecord fetches the blob for an already-resolved File record, reads and
+// decompresses it, and returns the raw bytes together with the filename and MIME type.
+func (s *FileService) downloadFileRecord(file storage.File) ([]byte, string, string, error) {
+	blob, err := s.MetaStore.GetBlob(file.BlobID)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("blob not found: %w", err)
+	}
+
+	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("file type not found: %w", err)
+	}
+
+	utils.Info("SERVICE", " FileType from DB: file_id=%s, mime=%s, category=%s, subtype=%s",
+		file.ID, fileType.MimeType, fileType.Category, fileType.Subtype)
+	utils.Info("SERVICE", " Reading blob: file_id=%s, blob_id=%d, volume_id=%d, offset=%d, size=%d, compression=%s",
+		file.ID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, blob.CompressionAlg)
+
+	data, err := s.Store.ReadBlob(blob.VolumeID, blob.Offset, blob.SizeCompressed)
+	if err != nil {
+		utils.Info("SERVICE", " ERROR reading blob from storage: file_id=%s, blob_id=%d, volume=%d, offset=%d, size=%d, error=%v",
+			file.ID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, err)
+		return nil, "", "", fmt.Errorf("error reading blob: %w", err)
+	}
+
+	decompressed, err := decompressBlob(data, blob.CompressionAlg)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	mimeType := fileType.MimeType
+	if mimeType == "" {
+		mimeType = s.determineMimeType(file.Name, "")
+		utils.Info("SERVICE", " Empty mime type from DB, using fallback: file_id=%s, fallback_mime=%s", file.ID, mimeType)
+	}
+
+	return decompressed, file.Name, mimeType, nil
+}
+
+// DownloadFile retrieves a file by its ID, handling decompression if necessary.
 func (s *FileService) DownloadFile(fileID string) ([]byte, string, string, error) {
 	file, err := s.MetaStore.GetFile(fileID)
 	if err != nil {
 		utils.Info("SERVICE", " File not found in metadata: file_id=%s, error=%v", fileID, err)
 		return nil, "", "", fmt.Errorf("file not found: %w", err)
 	}
-
-	blob, err := s.MetaStore.GetBlob(file.BlobID)
-	if err != nil {
-		utils.Info("SERVICE", " Blob not found: file_id=%s, blob_id=%d, error=%v", fileID, file.BlobID, err)
-		return nil, "", "", fmt.Errorf("blob not found: %w", err)
-	}
-
-	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
-	if err != nil {
-		utils.Info("SERVICE", " FileType not found: file_id=%s, file_type_id=%d, error=%v", fileID, blob.FileTypeID, err)
-		return nil, "", "", fmt.Errorf("file type not found: %w", err)
-	}
-
-	utils.Info("SERVICE", " FileType from DB: file_id=%s, mime=%s, category=%s, subtype=%s", fileID, fileType.MimeType, fileType.Category, fileType.Subtype)
-	utils.Info("SERVICE", " Reading blob: file_id=%s, blob_id=%d, volume_id=%d, offset=%d, size=%d, compression=%s",
-		fileID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, blob.CompressionAlg)
-
-	data, err := s.Store.ReadBlob(blob.VolumeID, blob.Offset, blob.SizeCompressed)
-	if err != nil {
-		utils.Info("SERVICE", " ERROR reading blob from storage: file_id=%s, blob_id=%d, volume=%d, offset=%d, size=%d, error=%v",
-			fileID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, err)
-		return nil, "", "", fmt.Errorf("error reading blob: %w", err)
-	}
-
-	// Decompress if needed
-	var decompressedData []byte
-	switch blob.CompressionAlg {
-	case "gzip":
-		reader, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, "", "", fmt.Errorf("gzip error: %w", err)
-		}
-		defer reader.Close()
-		decompressedData, err = io.ReadAll(reader)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("gzip read error: %w", err)
-		}
-	case "zstd":
-		decoder, err := zstd.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, "", "", fmt.Errorf("zstd error: %w", err)
-		}
-		defer decoder.Close()
-		decompressedData, err = io.ReadAll(decoder)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("zstd read error: %w", err)
-		}
-	case "none", "":
-		decompressedData = data
-	default:
-		return nil, "", "", fmt.Errorf("unknown compression algorithm: %s", blob.CompressionAlg)
-	}
-
-	// Fallback if mime type is empty
-	mimeType := fileType.MimeType
-	if mimeType == "" {
-		mimeType = s.determineMimeType(file.Name, "")
-		utils.Info("SERVICE", " Empty mime type from DB, using fallback: file_id=%s, fallback_mime=%s", fileID, mimeType)
-	}
-
-	return decompressedData, file.Name, mimeType, nil
+	return s.downloadFileRecord(file)
 }
 
-// DownloadFileByOldID retrieves a file by its old Cumulus ID
+// DownloadFileByOldID retrieves a file by its old Cumulus ID.
 func (s *FileService) DownloadFileByOldID(oldID int64) ([]byte, string, string, error) {
 	file, err := s.MetaStore.GetFileByOldID(oldID)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("file not found: %w", err)
 	}
-
-	blob, err := s.MetaStore.GetBlob(file.BlobID)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("blob not found: %w", err)
-	}
-
-	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("file type not found: %w", err)
-	}
-
-	data, err := s.Store.ReadBlob(blob.VolumeID, blob.Offset, blob.SizeCompressed)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("error reading blob: %w", err)
-	}
-
-	// Decompress if needed
-	var decompressedData []byte
-	switch blob.CompressionAlg {
-	case "gzip":
-		reader, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, "", "", fmt.Errorf("gzip error: %w", err)
-		}
-		defer reader.Close()
-		decompressedData, err = io.ReadAll(reader)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("gzip read error: %w", err)
-		}
-	case "zstd":
-		decoder, err := zstd.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, "", "", fmt.Errorf("zstd error: %w", err)
-		}
-		defer decoder.Close()
-		decompressedData, err = io.ReadAll(decoder)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("zstd read error: %w", err)
-		}
-	case "none", "":
-		decompressedData = data
-	default:
-		return nil, "", "", fmt.Errorf("unknown compression algorithm: %s", blob.CompressionAlg)
-	}
-
-	// Fallback if mime type is empty
-	mimeType := fileType.MimeType
-	if mimeType == "" {
-		mimeType = s.determineMimeType(file.Name, "")
-		utils.Info("SERVICE", " Empty mime type from DB, using fallback: old_id=%d, fallback_mime=%s", oldID, mimeType)
-	}
-
-	return decompressedData, file.Name, mimeType, nil
+	return s.downloadFileRecord(file)
 }
 
 // determineMimeType tries to detect the MIME type from Content-Type header or filename extension
@@ -592,13 +551,8 @@ type FileInfo struct {
 	Content        string     `json:"content,omitempty"` // Base64 encoded
 }
 
-// GetFileInfo retrieves complete information about a file
-func (s *FileService) GetFileInfo(fileID string, extended bool) (*FileInfo, error) {
-	file, err := s.MetaStore.GetFile(fileID)
-	if err != nil {
-		return nil, err
-	}
-
+// buildFileInfo assembles a FileInfo from an already-resolved File record.
+func (s *FileService) buildFileInfo(file storage.File, extended bool) (*FileInfo, error) {
 	blob, err := s.MetaStore.GetBlob(file.BlobID)
 	if err != nil {
 		return nil, err
@@ -632,7 +586,7 @@ func (s *FileService) GetFileInfo(fileID string, extended bool) (*FileInfo, erro
 	}
 
 	if extended {
-		data, _, _, err := s.DownloadFile(fileID)
+		data, _, _, err := s.downloadFileRecord(file)
 		if err != nil {
 			return nil, err
 		}
@@ -642,54 +596,22 @@ func (s *FileService) GetFileInfo(fileID string, extended bool) (*FileInfo, erro
 	return info, nil
 }
 
-// GetFileInfoByOldID retrieves complete information about a file by its old Cumulus ID
+// GetFileInfo retrieves complete information about a file.
+func (s *FileService) GetFileInfo(fileID string, extended bool) (*FileInfo, error) {
+	file, err := s.MetaStore.GetFile(fileID)
+	if err != nil {
+		return nil, err
+	}
+	return s.buildFileInfo(file, extended)
+}
+
+// GetFileInfoByOldID retrieves complete information about a file by its old Cumulus ID.
 func (s *FileService) GetFileInfoByOldID(oldID int64, extended bool) (*FileInfo, error) {
 	file, err := s.MetaStore.GetFileByOldID(oldID)
 	if err != nil {
 		return nil, err
 	}
-
-	blob, err := s.MetaStore.GetBlob(file.BlobID)
-	if err != nil {
-		return nil, err
-	}
-
-	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
-	if err != nil {
-		return nil, err
-	}
-
-	var tags []string
-	if file.Tags != "" {
-		tags = strings.Split(file.Tags, ",")
-	}
-
-	info := &FileInfo{
-		ID:             file.ID,
-		Name:           file.Name,
-		BlobID:         file.BlobID,
-		OldCumulusID:   file.OldCumulusID,
-		ExpiresAt:      file.ExpiresAt,
-		CreatedAt:      file.CreatedAt,
-		Tags:           tags,
-		Hash:           blob.Hash,
-		SizeRaw:        blob.SizeRaw,
-		SizeCompressed: blob.SizeCompressed,
-		CompressionAlg: blob.CompressionAlg,
-		MimeType:       fileType.MimeType,
-		Category:       fileType.Category,
-		Subtype:        fileType.Subtype,
-	}
-
-	if extended {
-		data, _, _, err := s.DownloadFileByOldID(oldID)
-		if err != nil {
-			return nil, err
-		}
-		info.Content = base64.StdEncoding.EncodeToString(data)
-	}
-
-	return info, nil
+	return s.buildFileInfo(file, extended)
 }
 
 // DeleteFile deletes a file and updates storage stats
