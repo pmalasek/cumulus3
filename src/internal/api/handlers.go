@@ -153,7 +153,11 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		uploadOpsTotal.WithLabelValues("error", fileTypeLabel).Inc()
 		utils.Info("UPLOAD", "ERROR: filename=%s, remote=%s, error=%v", cleanFilename, r.RemoteAddr, err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		if errors.Is(err, service.ErrOldCumulusIDConflict) {
+			http.Error(w, "Conflict: old_cumulus_id already assigned to a different file", http.StatusConflict)
+		} else {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
 		return
 	}
 

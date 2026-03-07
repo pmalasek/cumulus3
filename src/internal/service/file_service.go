@@ -25,6 +25,9 @@ import (
 // ErrNotFound is returned when a requested file or blob does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrOldCumulusIDConflict is returned when the provided old_cumulus_id is already assigned to a different file.
+var ErrOldCumulusIDConflict = errors.New("old_cumulus_id already assigned to a different file")
+
 type FileService struct {
 	Store               *storage.Store
 	MetaStore           *storage.MetadataSQL
@@ -97,8 +100,49 @@ func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, conte
 		utils.Info("SERVICE", "Deduplication hit: hash=%s, blob_id=%d", result.hash, blobID)
 	}
 
-	// Auto-assign old_cumulus_id when caller did not provide one
+	// If old_cumulus_id was explicitly provided, verify it is not already used by a different blob.
+	if oldCumulusID != nil {
+		existing, err := s.MetaStore.GetFileByOldID(*oldCumulusID)
+		if err == nil {
+			// Record exists – conflict only if it belongs to a different blob.
+			if existing.BlobID != blobID {
+				utils.Info("SERVICE", "CONFLICT: old_cumulus_id=%d already assigned to file_id=%s (different blob), new blob_id=%d",
+					*oldCumulusID, existing.ID, blobID)
+				return "", 0, false, ErrOldCumulusIDConflict
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return "", 0, false, fmt.Errorf("database error checking old_cumulus_id: %w", err)
+		}
+	}
+
+	// When old_cumulus_id was NOT provided by the caller, first check for an existing file
+	// with the same blob+filename+expiresAt (regardless of old_cumulus_id) to avoid creating
+	// duplicate records that differ only by the auto-assigned ID.
 	if oldCumulusID == nil {
+		existingFile, err := s.MetaStore.FindFileByBlobNameAndExpiry(blobID, filename, expiresAt)
+		if err != nil {
+			utils.Info("SERVICE", "ERROR checking existing file: blob_id=%d, error=%v", blobID, err)
+			return "", 0, false, err
+		}
+		if existingFile != nil {
+			// File already exists – merge tags if needed and return the existing record.
+			if tags != "" && tags != existingFile.Tags {
+				mergedTags := mergeTags(existingFile.Tags, tags)
+				if mergedTags != existingFile.Tags {
+					if err := s.MetaStore.UpdateFileTags(existingFile.ID, mergedTags); err != nil {
+						utils.Warn("SERVICE", "Failed to update tags for file_id=%s: %v", existingFile.ID, err)
+					}
+				}
+			}
+			utils.Info("SERVICE", "Duplicate file detected (auto-id path): returning existing file_id=%s, filename=%s", existingFile.ID, filename)
+			var existingOldID int64
+			if existingFile.OldCumulusID != nil {
+				existingOldID = *existingFile.OldCumulusID
+			}
+			return existingFile.ID, existingOldID, true, nil
+		}
+
+		// No existing file found – auto-assign the next old_cumulus_id.
 		maxID, err := s.MetaStore.GetMaxOldCumulusID()
 		if err != nil {
 			utils.Info("SERVICE", "ERROR getting max old_cumulus_id: %v", err)

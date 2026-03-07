@@ -396,6 +396,31 @@ func (m *MetadataSQL) GetMaxOldCumulusID() (int64, error) {
 	return maxID, err
 }
 
+// FindFileByBlobNameAndExpiry finds an existing file with the same blob_id, filename, and expiresAt,
+// ignoring old_cumulus_id. Used when old_cumulus_id is auto-assigned to avoid creating duplicates.
+func (m *MetadataSQL) FindFileByBlobNameAndExpiry(blobID int64, filename string, expiresAt *time.Time) (*File, error) {
+	var expAt any
+	if expiresAt != nil {
+		expAt = *expiresAt
+	}
+
+	const query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags
+	               FROM files
+	               WHERE blob_id = ? AND name = ? AND expires_at IS ?
+	               LIMIT 1`
+
+	var f File
+	err := m.db.QueryRow(query, blobID, filename, expAt).Scan(
+		&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
 // FindFileByBlobAndName finds an existing file with the same blob_id, filename, old_cumulus_id, and expiresAt.
 // SQLite's IS operator provides null-safe equality, so a single query covers all four nil/non-nil combinations.
 func (m *MetadataSQL) FindFileByBlobAndName(blobID int64, filename string, oldCumulusID *int64, expiresAt *time.Time) (*File, error) {
