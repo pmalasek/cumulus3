@@ -175,7 +175,7 @@ Cumulus3 separates **Logical Files** (user perspective) from **Physical Blobs** 
 - `original_filename` - User's filename
 - `mime_type` - Content type
 - `tags` - Searchable tags (JSON array)
-- `old_cumulus_id` - Legacy system ID
+- `old_cumulus_id` - Legacy system ID (auto-incremented if not provided)
 - `upload_date`, `validity` - Timestamps
 
 **Blobs Table (blobs):**
