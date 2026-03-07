@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	_ "github.com/pmalasek/cumulus3/docs"
 	"github.com/pmalasek/cumulus3/src/internal/images"
 	"github.com/pmalasek/cumulus3/src/internal/service"
+	"github.com/pmalasek/cumulus3/src/internal/storage"
 	"github.com/pmalasek/cumulus3/src/internal/utils"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -84,14 +87,14 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, s.MaxUploadSize)
 	if err := r.ParseMultipartForm(s.MaxUploadSize); err != nil {
-		utils.Info("UPLOAD", " Failed to parse form from %s: %v", r.RemoteAddr, err)
+		utils.Info("UPLOAD", "Failed to parse form from %s: %v", r.RemoteAddr, err)
 		http.Error(w, "File too large or invalid form", http.StatusBadRequest)
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		utils.Info("UPLOAD", " Error retrieving file from %s: %v", r.RemoteAddr, err)
+		utils.Info("UPLOAD", "Error retrieving file from %s: %v", r.RemoteAddr, err)
 		http.Error(w, "Error retrieving file", http.StatusBadRequest)
 		return
 	}
@@ -104,6 +107,8 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			oldCumulusID = &id
 		}
+	} else {
+		utils.Info("UPLOAD", "No old_cumulus_id provided by %s", r.RemoteAddr)
 	}
 
 	var expiresAt *time.Time
@@ -116,12 +121,13 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 		expiresAt = &exp
 	}
 
-	// Process tags
+	// Process tags – each form value may itself contain comma-separated tags
+	// (legacy client support). Tags are stored as a JSON array to allow arbitrary
+	// characters (including commas) in tag values.
 	var tags []string
 	if values, ok := r.Form["tags"]; ok {
 		for _, v := range values {
-			parts := strings.Split(v, ",")
-			for _, part := range parts {
+			for _, part := range strings.Split(v, ",") {
 				trimmed := strings.TrimSpace(part)
 				if trimmed != "" {
 					tags = append(tags, trimmed)
@@ -129,10 +135,10 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	tagsStr := strings.Join(tags, ",")
+	tagsStr := storage.TagsToJSON(tags)
 
 	cleanFilename := filepath.Base(header.Filename)
-	utils.Info("UPLOAD", " Starting upload: filename=%s, content_type=%s, size=%d, old_id=%v, expires=%v, tags=%s, remote=%s",
+	utils.Info("UPLOAD", "Starting upload: filename=%s, content_type=%s, size=%d, old_id=%v, expires=%v, tags=%s, remote=%s",
 		cleanFilename, header.Header.Get("Content-Type"), header.Size, oldCumulusID, expiresAt, tagsStr, r.RemoteAddr)
 
 	// Determine file type for metrics
@@ -143,11 +149,11 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call FileService
-	fileID, isDedup, err := s.FileService.UploadFileWithDedup(file, cleanFilename, contentType, oldCumulusID, expiresAt, tagsStr)
+	fileID, assignedOldID, isDedup, err := s.FileService.UploadFileWithDedup(file, cleanFilename, contentType, oldCumulusID, expiresAt, tagsStr)
 	if err != nil {
 		uploadOpsTotal.WithLabelValues("error", fileTypeLabel).Inc()
-		utils.Info("UPLOAD", " ERROR: filename=%s, remote=%s, error=%v", cleanFilename, r.RemoteAddr, err)
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		utils.Info("UPLOAD", "ERROR: filename=%s, remote=%s, error=%v", cleanFilename, r.RemoteAddr, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
@@ -156,11 +162,11 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 	if isDedup {
 		dedupHitsTotal.Inc()
 	}
-	utils.Info("UPLOAD", " SUCCESS: filename=%s, file_id=%s, dedup=%v, remote=%s", cleanFilename, fileID, isDedup, r.RemoteAddr)
+	utils.Info("UPLOAD", "SUCCESS: filename=%s, file_id=%s, dedup=%v, remote=%s", cleanFilename, fileID, isDedup, r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"fileID": fileID})
+	json.NewEncoder(w).Encode(map[string]string{"fileID": fileID, "cumulusID": fmt.Sprintf("%d", assignedOldID)})
 }
 
 func (s *Server) HandleDownloadFunc(w http.ResponseWriter, r *http.Request, path string) {
@@ -173,23 +179,24 @@ func (s *Server) HandleDownloadFunc(w http.ResponseWriter, r *http.Request, path
 	// URL is /v2/files/{id}
 	id := strings.TrimPrefix(r.URL.Path, path)
 	if id == "" || id == "/" {
-		utils.Info("DOWNLOAD", " Missing file ID from %s", r.RemoteAddr)
+		utils.Info("DOWNLOAD", "Missing file ID from %s", r.RemoteAddr)
 		http.Error(w, "Missing file ID", http.StatusBadRequest)
 		return
 	}
 
-	utils.Info("DOWNLOAD", " Requesting file_id=%s, remote=%s", id, r.RemoteAddr)
-	data, filename, mimeType, err := s.FileService.DownloadFile(id)
+	utils.Info("DOWNLOAD", "Requesting file_id=%s, remote=%s", id, r.RemoteAddr)
+	rc, sizeRaw, filename, mimeType, err := s.FileService.DownloadFile(id)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			utils.Info("DOWNLOAD", " File not found: file_id=%s, remote=%s", id, r.RemoteAddr)
+		if errors.Is(err, service.ErrNotFound) {
+			utils.Info("DOWNLOAD", "File not found: file_id=%s, remote=%s", id, r.RemoteAddr)
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
-		utils.Info("DOWNLOAD", " ERROR: file_id=%s, remote=%s, error=%v", id, r.RemoteAddr, err)
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		utils.Info("DOWNLOAD", "ERROR: file_id=%s, remote=%s, error=%v", id, r.RemoteAddr, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+	defer rc.Close()
 
 	w.Header().Set("Content-Type", mimeType)
 	encodedFilename := url.PathEscape(filename)
@@ -205,10 +212,10 @@ func (s *Server) HandleDownloadFunc(w http.ResponseWriter, r *http.Request, path
 	}
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Write(data)
-	RecordBlobBytesRead(len(data))
-	utils.Info("DOWNLOAD", " SUCCESS: file_id=%s, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
+	w.Header().Set("Content-Length", strconv.FormatInt(sizeRaw, 10))
+	n, _ := io.Copy(w, rc)
+	RecordBlobBytesRead(int(n))
+	utils.Info("DOWNLOAD", "SUCCESS: file_id=%s, filename=%s, size=%d, mime=%s, remote=%s", id, filename, sizeRaw, mimeType, r.RemoteAddr)
 }
 
 func (s *Server) HandleDownloadByOldIDFunc(w http.ResponseWriter, r *http.Request, path string) {
@@ -216,7 +223,7 @@ func (s *Server) HandleDownloadByOldIDFunc(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	utils.Info("TEMP_DOWNLOAD_OLD_ID", " Handler invoked from %s", r.URL.Path)
+	utils.Info("TEMP_DOWNLOAD_OLD_ID", "Handler invoked from %s", r.URL.Path)
 	idStr := strings.TrimPrefix(r.URL.Path, path)
 	if idStr == "" || idStr == "/" {
 		http.Error(w, "Missing file ID", http.StatusBadRequest)
@@ -225,23 +232,24 @@ func (s *Server) HandleDownloadByOldIDFunc(w http.ResponseWriter, r *http.Reques
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		utils.Info("DOWNLOAD_OLD_ID", " Invalid ID format: id=%s, remote=%s, error=%v", idStr, r.RemoteAddr, err)
+		utils.Info("DOWNLOAD_OLD_ID", "Invalid ID format: id=%s, remote=%s, error=%v", idStr, r.RemoteAddr, err)
 		http.Error(w, "Invalid file ID", http.StatusBadRequest)
 		return
 	}
 
-	utils.Info("DOWNLOAD_OLD_ID", " Requesting old_id=%d, remote=%s", id, r.RemoteAddr)
-	data, filename, mimeType, err := s.FileService.DownloadFileByOldID(id)
+	utils.Info("DOWNLOAD_OLD_ID", "Requesting old_id=%d, remote=%s", id, r.RemoteAddr)
+	rc, sizeRaw, filename, mimeType, err := s.FileService.DownloadFileByOldID(id)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			utils.Info("DOWNLOAD_OLD_ID", " File not found: old_id=%d, remote=%s", id, r.RemoteAddr)
+		if errors.Is(err, service.ErrNotFound) {
+			utils.Info("DOWNLOAD_OLD_ID", "File not found: old_id=%d, remote=%s", id, r.RemoteAddr)
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
-		utils.Info("DOWNLOAD_OLD_ID", " ERROR: old_id=%d, remote=%s, error=%v", id, r.RemoteAddr, err)
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		utils.Info("DOWNLOAD_OLD_ID", "ERROR: old_id=%d, remote=%s, error=%v", id, r.RemoteAddr, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+	defer rc.Close()
 
 	w.Header().Set("Content-Type", mimeType)
 	encodedFilename := url.PathEscape(filename)
@@ -257,10 +265,10 @@ func (s *Server) HandleDownloadByOldIDFunc(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Write(data)
-	RecordBlobBytesRead(len(data))
-	utils.Info("DOWNLOAD_OLD_ID", " SUCCESS: old_id=%d, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
+	w.Header().Set("Content-Length", strconv.FormatInt(sizeRaw, 10))
+	n, _ := io.Copy(w, rc)
+	RecordBlobBytesRead(int(n))
+	utils.Info("DOWNLOAD_OLD_ID", "SUCCESS: old_id=%d, filename=%s, size=%d, mime=%s, remote=%s", id, filename, sizeRaw, mimeType, r.RemoteAddr)
 }
 
 func (s *Server) HandleFileInfoFunc(w http.ResponseWriter, r *http.Request, path string) {
@@ -271,7 +279,7 @@ func (s *Server) HandleFileInfoFunc(w http.ResponseWriter, r *http.Request, path
 
 	fileID := strings.TrimPrefix(r.URL.Path, path)
 	if fileID == "" || fileID == "/" {
-		utils.Info("FILE_INFO", " Missing file ID from %s", r.RemoteAddr)
+		utils.Info("FILE_INFO", "Missing file ID from %s", r.RemoteAddr)
 		http.Error(w, "Missing file ID", http.StatusBadRequest)
 		return
 	}
@@ -289,17 +297,17 @@ func (s *Server) HandleFileInfoFunc(w http.ResponseWriter, r *http.Request, path
 
 	info, err := s.FileService.GetFileInfo(fileID, extended)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			utils.Info("FILE_INFO", " File not found: file_id=%s, remote=%s", fileID, r.RemoteAddr)
+		if errors.Is(err, service.ErrNotFound) {
+			utils.Info("FILE_INFO", "File not found: file_id=%s, remote=%s", fileID, r.RemoteAddr)
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
-		utils.Info("FILE_INFO", " ERROR: file_id=%s, remote=%s, error=%v", fileID, r.RemoteAddr, err)
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		utils.Info("FILE_INFO", "ERROR: file_id=%s, remote=%s, error=%v", fileID, r.RemoteAddr, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	utils.Info("FILE_INFO", " SUCCESS: file_id=%s, extended=%v, remote=%s", fileID, extended, r.RemoteAddr)
+	utils.Info("FILE_INFO", "SUCCESS: file_id=%s, extended=%v, remote=%s", fileID, extended, r.RemoteAddr)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
 }
@@ -335,11 +343,11 @@ func (s *Server) HandleFileInfoByOldIDFunc(w http.ResponseWriter, r *http.Reques
 
 	info, err := s.FileService.GetFileInfoByOldID(id, extended)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+		if errors.Is(err, service.ErrNotFound) {
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
@@ -355,20 +363,20 @@ func (s *Server) HandleDeleteFunc(w http.ResponseWriter, r *http.Request, path s
 
 	id := strings.TrimPrefix(r.URL.Path, path)
 	if id == "" {
-		utils.Info("DELETE", " Missing file ID from %s", r.RemoteAddr)
+		utils.Info("DELETE", "Missing file ID from %s", r.RemoteAddr)
 		http.Error(w, "File ID is required", http.StatusBadRequest)
 		return
 	}
 
-	utils.Info("DELETE", " Deleting file_id=%s, remote=%s", id, r.RemoteAddr)
+	utils.Info("DELETE", "Deleting file_id=%s, remote=%s", id, r.RemoteAddr)
 	err := s.FileService.DeleteFile(id)
 	if err != nil {
-		utils.Info("DELETE", " ERROR: file_id=%s, remote=%s, error=%v", id, r.RemoteAddr, err)
-		http.Error(w, "Error deleting file: "+err.Error(), http.StatusInternalServerError)
+		utils.Info("DELETE", "ERROR: file_id=%s, remote=%s, error=%v", id, r.RemoteAddr, err)
+		http.Error(w, "Error deleting file", http.StatusInternalServerError)
 		return
 	}
 
-	utils.Info("DELETE", " SUCCESS: file_id=%s, remote=%s", id, r.RemoteAddr)
+	utils.Info("DELETE", "SUCCESS: file_id=%s, remote=%s", id, r.RemoteAddr)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("File deleted successfully"))
 }
@@ -384,7 +392,7 @@ func (s *Server) HandleImageFunc(w http.ResponseWriter, r *http.Request, path st
 	parts := strings.Split(urlPath, "/")
 
 	if len(parts) < 1 || parts[0] == "" {
-		utils.Info("IMAGE", " Missing UUID from %s", r.RemoteAddr)
+		utils.Info("IMAGE", "Missing UUID from %s", r.RemoteAddr)
 		http.Error(w, "Missing file UUID", http.StatusBadRequest)
 		return
 	}
@@ -419,22 +427,30 @@ func (s *Server) HandleImageFunc(w http.ResponseWriter, r *http.Request, path st
 	case "lg":
 		size = &images.SizeLg
 	default:
-		utils.Info("IMAGE", " Invalid variant: uuid=%s, variant=%s, remote=%s", uuid, variant, r.RemoteAddr)
+		utils.Info("IMAGE", "Invalid variant: uuid=%s, variant=%s, remote=%s", uuid, variant, r.RemoteAddr)
 		http.Error(w, "Invalid variant. Use: thumb, sm, md, lg", http.StatusBadRequest)
 		return
 	}
 
-	utils.Info("IMAGE", " Requesting: uuid=%s, variant=%s, remote=%s", uuid, variant, r.RemoteAddr)
+	utils.Info("IMAGE", "Requesting: uuid=%s, variant=%s, remote=%s", uuid, variant, r.RemoteAddr)
 
 	// Stáhneme originální soubor
-	data, filename, mimeType, err := s.FileService.DownloadFile(uuid)
+	rc, _, filename, mimeType, err := s.FileService.DownloadFile(uuid)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			utils.Info("IMAGE", " File not found: uuid=%s, remote=%s", uuid, r.RemoteAddr)
+		if errors.Is(err, service.ErrNotFound) {
+			utils.Info("IMAGE", "File not found: uuid=%s, remote=%s", uuid, r.RemoteAddr)
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
-		utils.Info("IMAGE", " ERROR downloading: uuid=%s, remote=%s, error=%v", uuid, r.RemoteAddr, err)
+		utils.Info("IMAGE", "ERROR downloading: uuid=%s, remote=%s, error=%v", uuid, r.RemoteAddr, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	defer rc.Close()
+	// Image processing requires the full content in memory
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		utils.Info("IMAGE", "ERROR reading file: uuid=%s, remote=%s, error=%v", uuid, r.RemoteAddr, err)
 		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -444,14 +460,14 @@ func (s *Server) HandleImageFunc(w http.ResponseWriter, r *http.Request, path st
 	isPDF := images.IsPDFMimeType(mimeType)
 
 	if !isImage && !isPDF {
-		utils.Info("IMAGE", " Not an image or PDF: uuid=%s, mime=%s, remote=%s", uuid, mimeType, r.RemoteAddr)
+		utils.Info("IMAGE", "Not an image or PDF: uuid=%s, mime=%s, remote=%s", uuid, mimeType, r.RemoteAddr)
 		http.Error(w, "File is not an image or PDF", http.StatusUnsupportedMediaType)
 		return
 	}
 
 	// Pokud není specifikována varianta, vrátíme originální soubor
 	if size == nil {
-		utils.Info("IMAGE", " Returning original: uuid=%s, size=%d, remote=%s", uuid, len(data), r.RemoteAddr)
+		utils.Info("IMAGE", "Returning original: uuid=%s, size=%d, remote=%s", uuid, len(data), r.RemoteAddr)
 		// Cache headers - originály jsou immutable (UUID se nemění)
 		w.Header().Set("Cache-Control", "public, max-age=2592000, immutable") // 30 dní
 		w.Header().Set("ETag", etag)
@@ -465,30 +481,30 @@ func (s *Server) HandleImageFunc(w http.ResponseWriter, r *http.Request, path st
 
 	// Pro PDF s variantou musíme vygenerovat náhled
 	if isPDF {
-		utils.Info("IMAGE", " Generating PDF thumbnail: uuid=%s, variant=%s, size=%dx%d", uuid, variant, size.Width, size.Height)
+		utils.Info("IMAGE", "Generating PDF thumbnail: uuid=%s, variant=%s, size=%dx%d", uuid, variant, size.Width, size.Height)
 		thumbnail, err := images.GeneratePDFThumbnail(data, *size)
 		if err != nil {
-			utils.Info("IMAGE", " ERROR generating PDF thumbnail: uuid=%s, remote=%s, error=%v", uuid, r.RemoteAddr, err)
+			utils.Info("IMAGE", "ERROR generating PDF thumbnail: uuid=%s, remote=%s, error=%v", uuid, r.RemoteAddr, err)
 			http.Error(w, "Failed to generate PDF thumbnail: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		data = thumbnail
 		mimeType = "image/jpeg"
-		utils.Info("IMAGE", " SUCCESS PDF thumbnail: uuid=%s, variant=%s, size=%d, remote=%s", uuid, variant, len(data), r.RemoteAddr)
+		utils.Info("IMAGE", "SUCCESS PDF thumbnail: uuid=%s, variant=%s, size=%d, remote=%s", uuid, variant, len(data), r.RemoteAddr)
 	} else {
 		// Pro obrázky provedeme resize
-		utils.Info("IMAGE", " Resizing image: uuid=%s, variant=%s, size=%dx%d", uuid, variant, size.Width, size.Height)
+		utils.Info("IMAGE", "Resizing image: uuid=%s, variant=%s, size=%dx%d", uuid, variant, size.Width, size.Height)
 		resized, err := images.ResizeImage(data, mimeType, *size)
 		if err != nil {
-			utils.Info("IMAGE", " ERROR resizing: uuid=%s, remote=%s, error=%v", uuid, r.RemoteAddr, err)
+			utils.Info("IMAGE", "ERROR resizing: uuid=%s, remote=%s, error=%v", uuid, r.RemoteAddr, err)
 			http.Error(w, "Failed to resize image: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		data = resized
 		mimeType = images.GetOutputMimeType(mimeType)
-		utils.Info("IMAGE", " SUCCESS resized: uuid=%s, variant=%s, size=%d, remote=%s", uuid, variant, len(data), r.RemoteAddr)
+		utils.Info("IMAGE", "SUCCESS resized: uuid=%s, variant=%s, size=%d, remote=%s", uuid, variant, len(data), r.RemoteAddr)
 	}
 
 	// Nastavíme hlavičky a vrátíme obrázek

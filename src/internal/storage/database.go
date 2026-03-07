@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -147,6 +148,63 @@ func initSchema(db *sql.DB) error {
 func (m *MetadataSQL) Close() error {
 	return m.db.Close()
 }
+
+// tagsToJSON serialises a slice of tag strings to a compact JSON array stored in the DB.
+// An empty or nil slice is stored as NULL (empty string).
+func tagsToJSON(tags []string) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(tags)
+	return string(b)
+}
+
+// tagsFromJSON deserialises a JSON array column value back to a []string.
+// Empty or legacy CSV values are handled gracefully.
+func tagsFromJSON(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	// JSON array
+	if raw[0] == '[' {
+		var tags []string
+		if err := json.Unmarshal([]byte(raw), &tags); err == nil {
+			return tags
+		}
+	}
+	// Legacy CSV fallback (existing data in the DB before the migration)
+	var tags []string
+	for _, t := range splitCSV(raw) {
+		if t != "" {
+			tags = append(tags, t)
+		}
+	}
+	return tags
+}
+
+// splitCSV splits a comma-separated string, trimming whitespace from each part.
+func splitCSV(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == ',' {
+			part := s[start:i]
+			for len(part) > 0 && part[0] == ' ' {
+				part = part[1:]
+			}
+			for len(part) > 0 && part[len(part)-1] == ' ' {
+				part = part[:len(part)-1]
+			}
+			out = append(out, part)
+			start = i + 1
+		}
+	}
+	return out
+}
+
+// TagsToJSON and TagsFromJSON are exported for use outside the storage package.
+func TagsToJSON(tags []string) string  { return tagsToJSON(tags) }
+func TagsFromJSON(raw string) []string { return tagsFromJSON(raw) }
 
 func (m *MetadataSQL) SaveFile(file File) error {
 	query := `
@@ -331,42 +389,35 @@ func (m *MetadataSQL) GetFileByOldID(oldID int64) (File, error) {
 	return f, nil
 }
 
-// FindFileByBlobAndName finds an existing file with the same blob_id, filename, old_cumulus_id, and expiresAt
-func (m *MetadataSQL) FindFileByBlobAndName(blobID int64, filename string, oldCumulusID *int64, expiresAt *time.Time) (*File, error) {
-	var f File
-	var query string
-	var err error
+// GetMaxOldCumulusID returns the current maximum old_cumulus_id from the files table, or 0 if no rows exist.
+func (m *MetadataSQL) GetMaxOldCumulusID() (int64, error) {
+	var maxID int64
+	err := m.db.QueryRow("SELECT COALESCE(MAX(old_cumulus_id), 0) FROM files").Scan(&maxID)
+	return maxID, err
+}
 
-	// Build query based on oldCumulusID and expiresAt combinations
-	if oldCumulusID == nil && expiresAt == nil {
-		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
-		         FROM files 
-		         WHERE blob_id = ? AND name = ? AND old_cumulus_id IS NULL AND expires_at IS NULL
-		         LIMIT 1`
-		err = m.db.QueryRow(query, blobID, filename).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
-	} else if oldCumulusID == nil && expiresAt != nil {
-		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
-		         FROM files 
-		         WHERE blob_id = ? AND name = ? AND old_cumulus_id IS NULL AND expires_at = ?
-		         LIMIT 1`
-		err = m.db.QueryRow(query, blobID, filename, *expiresAt).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
-	} else if oldCumulusID != nil && expiresAt == nil {
-		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
-		         FROM files 
-		         WHERE blob_id = ? AND name = ? AND old_cumulus_id = ? AND expires_at IS NULL
-		         LIMIT 1`
-		err = m.db.QueryRow(query, blobID, filename, *oldCumulusID).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
-	} else {
-		// Both oldCumulusID and expiresAt are set
-		query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags 
-		         FROM files 
-		         WHERE blob_id = ? AND name = ? AND old_cumulus_id = ? AND expires_at = ?
-		         LIMIT 1`
-		err = m.db.QueryRow(query, blobID, filename, *oldCumulusID, *expiresAt).Scan(&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
+// FindFileByBlobAndName finds an existing file with the same blob_id, filename, old_cumulus_id, and expiresAt.
+// SQLite's IS operator provides null-safe equality, so a single query covers all four nil/non-nil combinations.
+func (m *MetadataSQL) FindFileByBlobAndName(blobID int64, filename string, oldCumulusID *int64, expiresAt *time.Time) (*File, error) {
+	var oldID any
+	if oldCumulusID != nil {
+		oldID = *oldCumulusID
+	}
+	var expAt any
+	if expiresAt != nil {
+		expAt = *expiresAt
 	}
 
+	const query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags
+	               FROM files
+	               WHERE blob_id = ? AND name = ? AND old_cumulus_id IS ? AND expires_at IS ?
+	               LIMIT 1`
+
+	var f File
+	err := m.db.QueryRow(query, blobID, filename, oldID, expAt).Scan(
+		&f.ID, &f.Name, &f.BlobID, &f.OldCumulusID, &f.ExpiresAt, &f.CreatedAt, &f.Tags)
 	if err == sql.ErrNoRows {
-		return nil, nil // Not found
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
@@ -374,9 +425,132 @@ func (m *MetadataSQL) FindFileByBlobAndName(blobID int64, filename string, oldCu
 	return &f, nil
 }
 
-// UpdateFileTags updates the tags for a file
+// UpdateFileTags updates the tags for a file.
+// tags must be a JSON-encoded array produced by TagsToJSON.
 func (m *MetadataSQL) UpdateFileTags(fileID string, tags string) error {
 	query := `UPDATE files SET tags = ? WHERE id = ?`
 	_, err := m.db.Exec(query, tags, fileID)
 	return err
+}
+
+// StorageStats holds aggregate statistics returned by GetStorageStats.
+type StorageStats struct {
+	BlobCount        int64
+	BlobTotalSize    int64
+	BlobRawSize      int64
+	FileCount        int64
+	DeletedBlobsSize int64
+}
+
+// GetBlobStats returns aggregate counts and sizes from blobs and files tables.
+func (m *MetadataSQL) GetBlobStats() (StorageStats, error) {
+	var s StorageStats
+	err := m.db.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(size_compressed), 0), COALESCE(SUM(size_raw), 0)
+		FROM blobs
+	`).Scan(&s.BlobCount, &s.BlobTotalSize, &s.BlobRawSize)
+	if err != nil {
+		return s, err
+	}
+
+	if err := m.db.QueryRow(`SELECT COUNT(*) FROM files`).Scan(&s.FileCount); err != nil {
+		return s, err
+	}
+
+	// Blobs not referenced by any file (candidates for compaction).
+	err = m.db.QueryRow(`
+		SELECT COALESCE(SUM(b.size_compressed), 0)
+		FROM blobs b
+		LEFT JOIN files f ON b.id = f.blob_id
+		WHERE f.blob_id IS NULL
+	`).Scan(&s.DeletedBlobsSize)
+	if err != nil {
+		// Non-fatal – return zeroed field instead of failing the whole request.
+		s.DeletedBlobsSize = 0
+	}
+
+	return s, nil
+}
+
+// IntegrityQuickResult holds counts returned by a quick (DB-only) integrity check.
+type IntegrityQuickResult struct {
+	OrphanedBlobs int64
+	MissingBlobs  int64
+}
+
+// GetIntegrityQuick counts orphaned blobs and files referencing non-existent blobs.
+func (m *MetadataSQL) GetIntegrityQuick() (IntegrityQuickResult, error) {
+	var r IntegrityQuickResult
+	err := m.db.QueryRow(`
+		SELECT COUNT(*) FROM blobs b
+		LEFT JOIN files f ON b.id = f.blob_id
+		WHERE f.blob_id IS NULL
+	`).Scan(&r.OrphanedBlobs)
+	if err != nil {
+		return r, err
+	}
+
+	err = m.db.QueryRow(`
+		SELECT COUNT(*) FROM files f
+		LEFT JOIN blobs b ON f.blob_id = b.id
+		WHERE b.id IS NULL
+	`).Scan(&r.MissingBlobs)
+	return r, err
+}
+
+// GetDistinctVolumeIDs returns the sorted list of volume IDs referenced by blobs.
+func (m *MetadataSQL) GetDistinctVolumeIDs() ([]int64, error) {
+	rows, err := m.db.Query(`SELECT DISTINCT volume_id FROM blobs ORDER BY volume_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// GetBlobsInRange returns a page of blobs ordered by volume_id, offset.
+// Used by the deep integrity check to iterate in batches without holding locks.
+type BlobLocation struct {
+	ID             int64
+	VolumeID       int64
+	Offset         int64
+	SizeCompressed int64
+}
+
+func (m *MetadataSQL) GetBlobsInRange(limit, offset int64) ([]BlobLocation, error) {
+	rows, err := m.db.Query(`
+		SELECT id, volume_id, offset, size_compressed
+		FROM blobs
+		ORDER BY volume_id, offset
+		LIMIT ? OFFSET ?
+	`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var blobs []BlobLocation
+	for rows.Next() {
+		var b BlobLocation
+		if err := rows.Scan(&b.ID, &b.VolumeID, &b.Offset, &b.SizeCompressed); err != nil {
+			return nil, err
+		}
+		blobs = append(blobs, b)
+	}
+	return blobs, rows.Err()
+}
+
+// GetTotalBlobCount returns the total number of blobs.
+func (m *MetadataSQL) GetTotalBlobCount() (int64, error) {
+	var count int64
+	return count, m.db.QueryRow(`SELECT COUNT(*) FROM blobs`).Scan(&count)
 }

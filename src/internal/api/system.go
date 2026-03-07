@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pmalasek/cumulus3/src/internal/utils"
 )
 
@@ -47,13 +48,23 @@ func (jm *JobManager) CreateJob(jobType string, volumeID *int64) *Job {
 	defer jm.mu.Unlock()
 
 	job := &Job{
-		ID:        fmt.Sprintf("%s-%d", jobType, time.Now().Unix()),
+		ID:        uuid.New().String(),
 		Type:      jobType,
 		Status:    JobStatusPending,
 		VolumeID:  volumeID,
 		StartedAt: time.Now(),
 	}
 	jm.jobs[job.ID] = job
+
+	// Evict completed/failed jobs older than 1 hour to prevent unbounded memory growth.
+	cutoff := time.Now().Add(-1 * time.Hour)
+	for id, j := range jm.jobs {
+		if (j.Status == JobStatusCompleted || j.Status == JobStatusFailed) &&
+			j.CompletedAt != nil && j.CompletedAt.Before(cutoff) {
+			delete(jm.jobs, id)
+		}
+	}
+
 	return job
 }
 
@@ -109,74 +120,45 @@ func (s *Server) HandleSystemStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get blob count and total size
-	var blobCount int64
-	var blobTotalSize, blobRawSize int64
-	err := s.FileService.MetaStore.GetDB().QueryRow(`
-		SELECT COUNT(*), COALESCE(SUM(size_compressed), 0), COALESCE(SUM(size_raw), 0)
-		FROM blobs
-	`).Scan(&blobCount, &blobTotalSize, &blobRawSize)
+	storageStats, err := s.FileService.MetaStore.GetBlobStats()
 	if err != nil {
-		utils.Error("SYSTEM", "Failed to get blob stats: %v", err)
+		utils.Error("SYSTEM", "Failed to get stats: %v", err)
 		http.Error(w, "Failed to get stats", http.StatusInternalServerError)
 		return
 	}
 
-	// Get file count
-	var fileCount int64
-	err = s.FileService.MetaStore.GetDB().QueryRow(`SELECT COUNT(*) FROM files`).Scan(&fileCount)
-	if err != nil {
-		utils.Error("SYSTEM", "Failed to get file stats: %v", err)
-		http.Error(w, "Failed to get stats", http.StatusInternalServerError)
-		return
-	}
-
-	// Calculate deduplication stats
-	deduplicatedCount := fileCount - blobCount
+	deduplicatedCount := storageStats.FileCount - storageStats.BlobCount
 	deduplicationRatio := 0.0
-	if fileCount > 0 {
-		deduplicationRatio = float64(deduplicatedCount) / float64(fileCount) * 100
+	if storageStats.FileCount > 0 {
+		deduplicationRatio = float64(deduplicatedCount) / float64(storageStats.FileCount) * 100
 	}
 
 	compressionRatio := 0.0
-	if blobRawSize > 0 {
-		compressionRatio = (1.0 - float64(blobTotalSize)/float64(blobRawSize)) * 100
-	}
-
-	// Calculate deleted blobs size (blobs not referenced by any files)
-	var deletedBlobsSize int64
-	err = s.FileService.MetaStore.GetDB().QueryRow(`
-		SELECT COALESCE(SUM(b.size_compressed), 0)
-		FROM blobs b
-		LEFT JOIN files f ON b.id = f.blob_id
-		WHERE f.blob_id IS NULL
-	`).Scan(&deletedBlobsSize)
-	if err != nil {
-		utils.Error("SYSTEM", "Failed to get deleted blobs stats: %v", err)
-		deletedBlobsSize = 0
+	if storageStats.BlobRawSize > 0 {
+		compressionRatio = (1.0 - float64(storageStats.BlobTotalSize)/float64(storageStats.BlobRawSize)) * 100
 	}
 
 	fragmentationRatio := 0.0
-	if blobTotalSize > 0 {
-		fragmentationRatio = float64(deletedBlobsSize) / float64(blobTotalSize) * 100
+	if storageStats.BlobTotalSize > 0 {
+		fragmentationRatio = float64(storageStats.DeletedBlobsSize) / float64(storageStats.BlobTotalSize) * 100
 	}
 
 	stats := map[string]interface{}{
 		"blobs": map[string]interface{}{
-			"count":            blobCount,
-			"totalSize":        blobTotalSize,
-			"rawSize":          blobRawSize,
+			"count":            storageStats.BlobCount,
+			"totalSize":        storageStats.BlobTotalSize,
+			"rawSize":          storageStats.BlobRawSize,
 			"compressionRatio": compressionRatio,
 		},
 		"files": map[string]interface{}{
-			"count":              fileCount,
+			"count":              storageStats.FileCount,
 			"deduplicatedCount":  deduplicatedCount,
 			"deduplicationRatio": deduplicationRatio,
 		},
 		"storage": map[string]interface{}{
-			"totalSize":          blobTotalSize,
-			"deletedSize":        deletedBlobsSize,
-			"usedSize":           blobTotalSize - deletedBlobsSize,
+			"totalSize":          storageStats.BlobTotalSize,
+			"deletedSize":        storageStats.DeletedBlobsSize,
+			"usedSize":           storageStats.BlobTotalSize - storageStats.DeletedBlobsSize,
 			"fragmentationRatio": fragmentationRatio,
 		},
 	}
@@ -387,42 +369,22 @@ func (s *Server) HandleSystemIntegrity(w http.ResponseWriter, r *http.Request) {
 func (s *Server) performQuickIntegrityCheck(job *Job) {
 	globalJobManager.UpdateJob(job.ID, JobStatusRunning, "Checking database integrity", nil)
 
-	// Check for orphaned blobs (blobs without files)
-	var orphanedBlobs int64
-	err := s.FileService.MetaStore.GetDB().QueryRow(`
-			SELECT COUNT(*) FROM blobs b
-			LEFT JOIN files f ON b.id = f.blob_id
-			WHERE f.blob_id IS NULL
-		`).Scan(&orphanedBlobs)
+	result, err := s.FileService.MetaStore.GetIntegrityQuick()
 	if err != nil {
 		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
 		return
 	}
 
-	// Check for missing blobs (files referencing non-existent blobs)
-	var missingBlobs int64
-	err = s.FileService.MetaStore.GetDB().QueryRow(`
-			SELECT COUNT(*) FROM files f
-			LEFT JOIN blobs b ON f.blob_id = b.id
-			WHERE b.id IS NULL
-		`).Scan(&missingBlobs)
-	if err != nil {
-		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
-		return
-	}
-
-	result := map[string]interface{}{
-		"orphanedBlobs": orphanedBlobs,
-		"missingBlobs":  missingBlobs,
+	out := map[string]interface{}{
+		"orphanedBlobs": result.OrphanedBlobs,
+		"missingBlobs":  result.MissingBlobs,
 		"status":        "ok",
 	}
-
-	if orphanedBlobs > 0 || missingBlobs > 0 {
-		result["status"] = "warning"
+	if result.OrphanedBlobs > 0 || result.MissingBlobs > 0 {
+		out["status"] = "warning"
 	}
 
-	// Store result in job progress as JSON
-	progressJSON, _ := json.Marshal(result)
+	progressJSON, _ := json.Marshal(out)
 	globalJobManager.UpdateJob(job.ID, JobStatusCompleted, string(progressJSON), nil)
 }
 
@@ -438,78 +400,52 @@ func (s *Server) performDeepIntegrityCheck(job *Job) {
 		"status":            "ok",
 	}
 
-	// First run quick checks
+	// Database consistency check
 	globalJobManager.UpdateJob(job.ID, JobStatusRunning, "Checking database consistency", nil)
 
-	var orphanedBlobs, missingBlobs int64
-	err := s.FileService.MetaStore.GetDB().QueryRow(`
-		SELECT COUNT(*) FROM blobs b
-		LEFT JOIN files f ON b.id = f.blob_id
-		WHERE f.blob_id IS NULL
-	`).Scan(&orphanedBlobs)
+	quick, err := s.FileService.MetaStore.GetIntegrityQuick()
 	if err != nil {
 		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
 		return
 	}
-	result["orphanedBlobs"] = orphanedBlobs
-
-	err = s.FileService.MetaStore.GetDB().QueryRow(`
-		SELECT COUNT(*) FROM files f
-		LEFT JOIN blobs b ON f.blob_id = b.id
-		WHERE b.id IS NULL
-	`).Scan(&missingBlobs)
-	if err != nil {
-		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
-		return
-	}
-	result["missingBlobs"] = missingBlobs
+	result["orphanedBlobs"] = quick.OrphanedBlobs
+	result["missingBlobs"] = quick.MissingBlobs
 
 	// Check physical volumes exist
 	globalJobManager.UpdateJob(job.ID, JobStatusRunning, "Checking volume files on disk", nil)
 
-	rows, err := s.FileService.MetaStore.GetDB().Query(`
-		SELECT DISTINCT volume_id FROM blobs ORDER BY volume_id
-	`)
+	volumeIDs, err := s.FileService.MetaStore.GetDistinctVolumeIDs()
 	if err != nil {
 		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
 		return
 	}
-	defer rows.Close()
 
 	missingVolumes := []int{}
-	for rows.Next() {
-		var volumeID int
-		if err := rows.Scan(&volumeID); err != nil {
-			continue
-		}
-
-		// Check if volume file exists
+	for _, volumeID := range volumeIDs {
 		volumePath := fmt.Sprintf("%s/volume_%08d.dat", s.FileService.Store.BaseDir, volumeID)
 		if _, err := os.Stat(volumePath); os.IsNotExist(err) {
 			// Try legacy format
 			volumePath = fmt.Sprintf("%s/volume_%d.dat", s.FileService.Store.BaseDir, volumeID)
 			if _, err := os.Stat(volumePath); os.IsNotExist(err) {
-				missingVolumes = append(missingVolumes, volumeID)
+				missingVolumes = append(missingVolumes, int(volumeID))
 			}
 		}
 	}
 	result["missingVolumes"] = missingVolumes
 
-	// Get total blob count for progress reporting
-	var totalBlobCount int64
-	err = s.FileService.MetaStore.GetDB().QueryRow(`SELECT COUNT(*) FROM blobs`).Scan(&totalBlobCount)
+	// Count total blobs for progress reporting
+	totalBlobCount, err := s.FileService.MetaStore.GetTotalBlobCount()
 	if err != nil {
 		globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
 		return
 	}
 
-	// Check blob readability (read first 100 bytes of each blob to verify it's accessible)
-	// Process in batches to avoid holding database locks for too long
+	// Check blob readability in batches
 	globalJobManager.UpdateJob(job.ID, JobStatusRunning, fmt.Sprintf("Verifying blob readability (0/%d)", totalBlobCount), nil)
 
 	unreadableBlobs := int64(0)
 	totalChecked := int64(0)
-	currentVolume := -1
+	currentVolume := int64(-1)
 	var volumeFile *os.File
 	defer func() {
 		if volumeFile != nil {
@@ -517,29 +453,17 @@ func (s *Server) performDeepIntegrityCheck(job *Job) {
 		}
 	}()
 
-	batchSize := int64(1000)
-	testBuffer := make([]byte, 100) // Reuse buffer
+	const batchSize = int64(1000)
+	testBuffer := make([]byte, 100)
 
 	for offset := int64(0); offset < totalBlobCount; offset += batchSize {
-		// Query blobs in batches to release database locks between batches
-		blobRows, err := s.FileService.MetaStore.GetDB().Query(`
-			SELECT id, volume_id, offset, size_compressed 
-			FROM blobs 
-			ORDER BY volume_id, offset 
-			LIMIT ? OFFSET ?
-		`, batchSize, offset)
+		blobs, err := s.FileService.MetaStore.GetBlobsInRange(batchSize, offset)
 		if err != nil {
 			globalJobManager.UpdateJob(job.ID, JobStatusFailed, "", err)
 			return
 		}
 
-		for blobRows.Next() {
-			var blobID, volumeID int64
-			var blobOffset, sizeCompressed int64
-			if err := blobRows.Scan(&blobID, &volumeID, &blobOffset, &sizeCompressed); err != nil {
-				continue
-			}
-
+		for _, b := range blobs {
 			totalChecked++
 			if totalChecked%100 == 0 {
 				percentage := float64(totalChecked) / float64(totalBlobCount) * 100
@@ -547,44 +471,39 @@ func (s *Server) performDeepIntegrityCheck(job *Job) {
 					fmt.Sprintf("Checked %d/%d blobs (%.1f%%)", totalChecked, totalBlobCount, percentage), nil)
 			}
 
-			// Open volume file if needed
-			if currentVolume != int(volumeID) {
+			if currentVolume != b.VolumeID {
 				if volumeFile != nil {
 					volumeFile.Close()
+					volumeFile = nil
 				}
-				volumePath := fmt.Sprintf("%s/volume_%08d.dat", s.FileService.Store.BaseDir, volumeID)
+				volumePath := fmt.Sprintf("%s/volume_%08d.dat", s.FileService.Store.BaseDir, b.VolumeID)
 				volumeFile, err = os.Open(volumePath)
 				if err != nil {
-					// Try legacy format
-					volumePath = fmt.Sprintf("%s/volume_%d.dat", s.FileService.Store.BaseDir, volumeID)
+					volumePath = fmt.Sprintf("%s/volume_%d.dat", s.FileService.Store.BaseDir, b.VolumeID)
 					volumeFile, err = os.Open(volumePath)
 					if err != nil {
 						unreadableBlobs++
 						continue
 					}
 				}
-				currentVolume = int(volumeID)
+				currentVolume = b.VolumeID
 			}
 
-			// Try to read first 100 bytes of blob (header)
-			_, err := volumeFile.ReadAt(testBuffer, blobOffset)
-			if err != nil && err != io.EOF {
+			_, readErr := volumeFile.ReadAt(testBuffer, b.Offset)
+			if readErr != nil && readErr != io.EOF {
 				unreadableBlobs++
 			}
 		}
-		blobRows.Close()
 
-		// Small pause between batches to allow other operations
 		time.Sleep(10 * time.Millisecond)
 	}
 
 	result["unreadableBlobs"] = unreadableBlobs
 	result["totalBlobsChecked"] = totalChecked
 
-	// Determine overall status
-	if missingBlobs > 0 || len(missingVolumes) > 0 || unreadableBlobs > 0 {
+	if quick.MissingBlobs > 0 || len(missingVolumes) > 0 || unreadableBlobs > 0 {
 		result["status"] = "error"
-	} else if orphanedBlobs > 0 {
+	} else if quick.OrphanedBlobs > 0 {
 		result["status"] = "warning"
 	}
 

@@ -3,8 +3,10 @@ package service
 import (
 	"bytes"
 	"compress/gzip"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -19,6 +21,9 @@ import (
 	"github.com/pmalasek/cumulus3/src/internal/utils"
 	"golang.org/x/crypto/blake2b"
 )
+
+// ErrNotFound is returned when a requested file or blob does not exist.
+var ErrNotFound = errors.New("not found")
 
 type FileService struct {
 	Store               *storage.Store
@@ -41,15 +46,17 @@ func NewFileService(store *storage.Store, metaStore *storage.MetadataSQL, logger
 
 // UploadFile handles the entire file upload process: streaming, compression, deduplication, and metadata storage
 func (s *FileService) UploadFile(file io.Reader, filename string, contentType string, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, error) {
-	id, _, err := s.UploadFileWithDedup(file, filename, contentType, oldCumulusID, expiresAt, tags)
+	id, _, _, err := s.UploadFileWithDedup(file, filename, contentType, oldCumulusID, expiresAt, tags)
 	return id, err
 }
 
-// UploadFileWithDedup handles the entire file upload process and returns deduplication status
-func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, contentType string, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, bool, error) {
+// UploadFileWithDedup handles the entire file upload process and returns deduplication status.
+// If oldCumulusID is nil, the highest existing old_cumulus_id is found in the database, incremented by 1,
+// and used as the new value. The assigned old_cumulus_id is returned as the second return value.
+func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, contentType string, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, int64, bool, error) {
 	result, err := s.processStream(file)
 	if err != nil {
-		return "", false, err
+		return "", 0, false, err
 	}
 	defer result.cleanup()
 
@@ -59,7 +66,7 @@ func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, conte
 	result.tempFile.Seek(0, 0)
 	n, _ := io.ReadFull(result.tempFile, detectBuffer)
 	fileType := utils.DetectFileType(detectBuffer[:n])
-	utils.Info("SERVICE", " File type detected: type=%s, subtype=%s, mime=%s, hash=%s",
+	utils.Info("SERVICE", "File type detected: type=%s, subtype=%s, mime=%s, hash=%s",
 		fileType.Type, fileType.Subtype, fileType.ContentType, result.hash)
 
 	// If detection returned generic binary, try to use provided content type or extension
@@ -77,155 +84,128 @@ func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, conte
 	}
 
 	finalFile, sizeCompressed, alg := s.decideCompression(result)
-	utils.Info("SERVICE", " Compression decision: raw_size=%d, compressed_size=%d, algorithm=%s, hash=%s",
+	utils.Info("SERVICE", "Compression decision: raw_size=%d, compressed_size=%d, algorithm=%s, hash=%s",
 		result.sizeRaw, sizeCompressed, alg, result.hash)
 
 	blobID, isDedup, err := s.saveBlob(result.hash, finalFile, result.sizeRaw, sizeCompressed, alg, fileType)
 	if err != nil {
-		utils.Info("SERVICE", " ERROR saving blob: hash=%s, error=%v", result.hash, err)
-		return "", false, err
+		utils.Info("SERVICE", "ERROR saving blob: hash=%s, error=%v", result.hash, err)
+		return "", 0, false, err
 	}
 
 	if isDedup {
-		utils.Info("SERVICE", " Deduplication hit: hash=%s, blob_id=%d", result.hash, blobID)
+		utils.Info("SERVICE", "Deduplication hit: hash=%s, blob_id=%d", result.hash, blobID)
+	}
+
+	// Auto-assign old_cumulus_id when caller did not provide one
+	if oldCumulusID == nil {
+		maxID, err := s.MetaStore.GetMaxOldCumulusID()
+		if err != nil {
+			utils.Info("SERVICE", "ERROR getting max old_cumulus_id: %v", err)
+			return "", 0, false, err
+		}
+		autoID := maxID + 1
+		oldCumulusID = &autoID
+		utils.Info("SERVICE", "Auto-assigned old_cumulus_id=%d for filename=%s", autoID, filename)
 	}
 
 	fileID, err := s.saveFile(filename, blobID, oldCumulusID, expiresAt, tags)
 	if err != nil {
-		utils.Info("SERVICE", " ERROR saving file metadata: filename=%s, blob_id=%d, error=%v", filename, blobID, err)
+		utils.Info("SERVICE", "ERROR saving file metadata: filename=%s, blob_id=%d, error=%v", filename, blobID, err)
+		return "", 0, false, err
 	}
-	return fileID, isDedup, err
+	return fileID, *oldCumulusID, isDedup, err
 }
 
-// DownloadFile retrieves a file by its ID, handling decompression if necessary
-func (s *FileService) DownloadFile(fileID string) ([]byte, string, string, error) {
+// decompressBlob returns a streaming reader that decompresses data according to alg.
+// The caller must close the returned ReadCloser.
+func decompressBlob(data []byte, alg string) (io.ReadCloser, error) {
+	switch alg {
+	case "gzip":
+		r, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("gzip error: %w", err)
+		}
+		return r, nil
+	case "zstd":
+		d, err := zstd.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("zstd error: %w", err)
+		}
+		// *zstd.Decoder.Close() has no return value, so wrap in NopCloser
+		return io.NopCloser(d), nil
+	case "none", "":
+		return io.NopCloser(bytes.NewReader(data)), nil
+	default:
+		return nil, fmt.Errorf("unknown compression algorithm: %s", alg)
+	}
+}
+
+// downloadFileRecord fetches the blob for an already-resolved File record, reads and
+// decompresses it, and returns a streaming reader together with the raw size, filename and MIME type.
+// The caller must close the returned ReadCloser.
+func (s *FileService) downloadFileRecord(file storage.File) (io.ReadCloser, int64, string, string, error) {
+	blob, err := s.MetaStore.GetBlob(file.BlobID)
+	if err != nil {
+		return nil, 0, "", "", fmt.Errorf("blob not found: %w", err)
+	}
+
+	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
+	if err != nil {
+		return nil, 0, "", "", fmt.Errorf("file type not found: %w", err)
+	}
+
+	utils.Info("SERVICE", "FileType from DB: file_id=%s, mime=%s, category=%s, subtype=%s",
+		file.ID, fileType.MimeType, fileType.Category, fileType.Subtype)
+	utils.Info("SERVICE", "Reading blob: file_id=%s, blob_id=%d, volume_id=%d, offset=%d, size=%d, compression=%s",
+		file.ID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, blob.CompressionAlg)
+
+	data, err := s.Store.ReadBlob(blob.VolumeID, blob.Offset, blob.SizeCompressed)
+	if err != nil {
+		utils.Info("SERVICE", "ERROR reading blob from storage: file_id=%s, blob_id=%d, volume=%d, offset=%d, size=%d, error=%v",
+			file.ID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, err)
+		return nil, 0, "", "", fmt.Errorf("error reading blob: %w", err)
+	}
+
+	rc, err := decompressBlob(data, blob.CompressionAlg)
+	if err != nil {
+		return nil, 0, "", "", err
+	}
+
+	mimeType := fileType.MimeType
+	if mimeType == "" {
+		mimeType = s.determineMimeType(file.Name, "")
+		utils.Info("SERVICE", "Empty mime type from DB, using fallback: file_id=%s, fallback_mime=%s", file.ID, mimeType)
+	}
+
+	return rc, blob.SizeRaw, file.Name, mimeType, nil
+}
+
+// DownloadFile retrieves a file by its ID, handling decompression if necessary.
+// The caller must close the returned ReadCloser.
+func (s *FileService) DownloadFile(fileID string) (io.ReadCloser, int64, string, string, error) {
 	file, err := s.MetaStore.GetFile(fileID)
 	if err != nil {
-		utils.Info("SERVICE", " File not found in metadata: file_id=%s, error=%v", fileID, err)
-		return nil, "", "", fmt.Errorf("file not found: %w", err)
-	}
-
-	blob, err := s.MetaStore.GetBlob(file.BlobID)
-	if err != nil {
-		utils.Info("SERVICE", " Blob not found: file_id=%s, blob_id=%d, error=%v", fileID, file.BlobID, err)
-		return nil, "", "", fmt.Errorf("blob not found: %w", err)
-	}
-
-	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
-	if err != nil {
-		utils.Info("SERVICE", " FileType not found: file_id=%s, file_type_id=%d, error=%v", fileID, blob.FileTypeID, err)
-		return nil, "", "", fmt.Errorf("file type not found: %w", err)
-	}
-
-	utils.Info("SERVICE", " FileType from DB: file_id=%s, mime=%s, category=%s, subtype=%s", fileID, fileType.MimeType, fileType.Category, fileType.Subtype)
-	utils.Info("SERVICE", " Reading blob: file_id=%s, blob_id=%d, volume_id=%d, offset=%d, size=%d, compression=%s",
-		fileID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, blob.CompressionAlg)
-
-	data, err := s.Store.ReadBlob(blob.VolumeID, blob.Offset, blob.SizeCompressed)
-	if err != nil {
-		utils.Info("SERVICE", " ERROR reading blob from storage: file_id=%s, blob_id=%d, volume=%d, offset=%d, size=%d, error=%v",
-			fileID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, err)
-		return nil, "", "", fmt.Errorf("error reading blob: %w", err)
-	}
-
-	// Decompress if needed
-	var decompressedData []byte
-	switch blob.CompressionAlg {
-	case "gzip":
-		reader, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, "", "", fmt.Errorf("gzip error: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, 0, "", "", fmt.Errorf("%w: file_id=%s", ErrNotFound, fileID)
 		}
-		defer reader.Close()
-		decompressedData, err = io.ReadAll(reader)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("gzip read error: %w", err)
-		}
-	case "zstd":
-		decoder, err := zstd.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, "", "", fmt.Errorf("zstd error: %w", err)
-		}
-		defer decoder.Close()
-		decompressedData, err = io.ReadAll(decoder)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("zstd read error: %w", err)
-		}
-	case "none", "":
-		decompressedData = data
-	default:
-		return nil, "", "", fmt.Errorf("unknown compression algorithm: %s", blob.CompressionAlg)
+		utils.Info("SERVICE", "File not found in metadata: file_id=%s, error=%v", fileID, err)
+		return nil, 0, "", "", fmt.Errorf("file not found: %w", err)
 	}
-
-	// Fallback if mime type is empty
-	mimeType := fileType.MimeType
-	if mimeType == "" {
-		mimeType = s.determineMimeType(file.Name, "")
-		utils.Info("SERVICE", " Empty mime type from DB, using fallback: file_id=%s, fallback_mime=%s", fileID, mimeType)
-	}
-
-	return decompressedData, file.Name, mimeType, nil
+	return s.downloadFileRecord(file)
 }
 
-// DownloadFileByOldID retrieves a file by its old Cumulus ID
-func (s *FileService) DownloadFileByOldID(oldID int64) ([]byte, string, string, error) {
+// DownloadFileByOldID retrieves a file by its old Cumulus ID.
+// The caller must close the returned ReadCloser.
+func (s *FileService) DownloadFileByOldID(oldID int64) (io.ReadCloser, int64, string, string, error) {
 	file, err := s.MetaStore.GetFileByOldID(oldID)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("file not found: %w", err)
-	}
-
-	blob, err := s.MetaStore.GetBlob(file.BlobID)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("blob not found: %w", err)
-	}
-
-	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("file type not found: %w", err)
-	}
-
-	data, err := s.Store.ReadBlob(blob.VolumeID, blob.Offset, blob.SizeCompressed)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("error reading blob: %w", err)
-	}
-
-	// Decompress if needed
-	var decompressedData []byte
-	switch blob.CompressionAlg {
-	case "gzip":
-		reader, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, "", "", fmt.Errorf("gzip error: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, 0, "", "", fmt.Errorf("%w: old_id=%d", ErrNotFound, oldID)
 		}
-		defer reader.Close()
-		decompressedData, err = io.ReadAll(reader)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("gzip read error: %w", err)
-		}
-	case "zstd":
-		decoder, err := zstd.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, "", "", fmt.Errorf("zstd error: %w", err)
-		}
-		defer decoder.Close()
-		decompressedData, err = io.ReadAll(decoder)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("zstd read error: %w", err)
-		}
-	case "none", "":
-		decompressedData = data
-	default:
-		return nil, "", "", fmt.Errorf("unknown compression algorithm: %s", blob.CompressionAlg)
+		return nil, 0, "", "", fmt.Errorf("file not found: %w", err)
 	}
-
-	// Fallback if mime type is empty
-	mimeType := fileType.MimeType
-	if mimeType == "" {
-		mimeType = s.determineMimeType(file.Name, "")
-		utils.Info("SERVICE", " Empty mime type from DB, using fallback: old_id=%d, fallback_mime=%s", oldID, mimeType)
-	}
-
-	return decompressedData, file.Name, mimeType, nil
+	return s.downloadFileRecord(file)
 }
 
 // determineMimeType tries to detect the MIME type from Content-Type header or filename extension
@@ -448,10 +428,8 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 	}
 
 	// 3. Write to storage
-	file.Seek(0, 0)
-	data, err := io.ReadAll(file)
-	if err != nil {
-		return 0, false, fmt.Errorf("error reading file for storage: %w", err)
+	if _, err := file.Seek(0, 0); err != nil {
+		return 0, false, fmt.Errorf("error seeking file for storage: %w", err)
 	}
 
 	compAlgCode := uint8(0)
@@ -463,7 +441,7 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 	}
 
 	// Use WriteBlobWithMetadata to check DB values for free space
-	volID, offset, actualSize, err := s.Store.WriteBlobWithMetadata(blobID, data, compAlgCode, s.MetaStore)
+	volID, offset, actualSize, err := s.Store.WriteBlobWithMetadata(blobID, file, sizeCompressed, compAlgCode, s.MetaStore)
 	if err != nil {
 		return 0, false, fmt.Errorf("storage error: %w", err)
 	}
@@ -500,14 +478,14 @@ func (s *FileService) saveFile(filename string, blobID int64, oldCumulusID *int6
 			mergedTags := mergeTags(existingFile.Tags, tags)
 			if mergedTags != existingFile.Tags {
 				if err := s.MetaStore.UpdateFileTags(existingFile.ID, mergedTags); err != nil {
-					utils.Warn("SERVICE", " Failed to update tags for file_id=%s: %v", existingFile.ID, err)
+					utils.Warn("SERVICE", "Failed to update tags for file_id=%s: %v", existingFile.ID, err)
 				} else {
-					utils.Info("SERVICE", " Tags merged for file_id=%s: old_tags=%s, new_tags=%s, merged=%s",
+					utils.Info("SERVICE", "Tags merged for file_id=%s: old_tags=%s, new_tags=%s, merged=%s",
 						existingFile.ID, existingFile.Tags, tags, mergedTags)
 				}
 			}
 		}
-		utils.Info("SERVICE", " Duplicate file detected: returning existing file_id=%s, filename=%s, blob_id=%d",
+		utils.Info("SERVICE", "Duplicate file detected: returning existing file_id=%s, filename=%s, blob_id=%d",
 			existingFile.ID, filename, blobID)
 		return existingFile.ID, nil
 	}
@@ -536,11 +514,11 @@ func (s *FileService) saveFile(filename string, blobID int64, oldCumulusID *int6
 		}
 	}
 
-	utils.Info("SERVICE", " New file created: file_id=%s, filename=%s, blob_id=%d", fileID, filename, blobID)
+	utils.Info("SERVICE", "New file created: file_id=%s, filename=%s, blob_id=%d", fileID, filename, blobID)
 	return fileID, nil
 }
 
-// mergeTags merges two tag strings, removing duplicates
+// mergeTags merges two JSON-encoded tag strings, deduplicating entries.
 func mergeTags(existingTags, newTags string) string {
 	if existingTags == "" {
 		return newTags
@@ -549,29 +527,23 @@ func mergeTags(existingTags, newTags string) string {
 		return existingTags
 	}
 
-	// Parse existing tags
-	tagSet := make(map[string]bool)
-	for _, tag := range strings.Split(existingTags, ",") {
-		tag = strings.TrimSpace(tag)
+	tagSet := make(map[string]struct{})
+	for _, tag := range storage.TagsFromJSON(existingTags) {
 		if tag != "" {
-			tagSet[tag] = true
+			tagSet[tag] = struct{}{}
+		}
+	}
+	for _, tag := range storage.TagsFromJSON(newTags) {
+		if tag != "" {
+			tagSet[tag] = struct{}{}
 		}
 	}
 
-	// Add new tags
-	for _, tag := range strings.Split(newTags, ",") {
-		tag = strings.TrimSpace(tag)
-		if tag != "" {
-			tagSet[tag] = true
-		}
-	}
-
-	// Convert back to comma-separated string
-	var tags []string
+	merged := make([]string, 0, len(tagSet))
 	for tag := range tagSet {
-		tags = append(tags, tag)
+		merged = append(merged, tag)
 	}
-	return strings.Join(tags, ",")
+	return storage.TagsToJSON(merged)
 }
 
 type FileInfo struct {
@@ -592,13 +564,8 @@ type FileInfo struct {
 	Content        string     `json:"content,omitempty"` // Base64 encoded
 }
 
-// GetFileInfo retrieves complete information about a file
-func (s *FileService) GetFileInfo(fileID string, extended bool) (*FileInfo, error) {
-	file, err := s.MetaStore.GetFile(fileID)
-	if err != nil {
-		return nil, err
-	}
-
+// buildFileInfo assembles a FileInfo from an already-resolved File record.
+func (s *FileService) buildFileInfo(file storage.File, extended bool) (*FileInfo, error) {
 	blob, err := s.MetaStore.GetBlob(file.BlobID)
 	if err != nil {
 		return nil, err
@@ -611,7 +578,7 @@ func (s *FileService) GetFileInfo(fileID string, extended bool) (*FileInfo, erro
 
 	var tags []string
 	if file.Tags != "" {
-		tags = strings.Split(file.Tags, ",")
+		tags = storage.TagsFromJSON(file.Tags)
 	}
 
 	info := &FileInfo{
@@ -632,64 +599,43 @@ func (s *FileService) GetFileInfo(fileID string, extended bool) (*FileInfo, erro
 	}
 
 	if extended {
-		data, _, _, err := s.DownloadFile(fileID)
+		rc, _, _, _, err := s.downloadFileRecord(file)
 		if err != nil {
 			return nil, err
 		}
-		info.Content = base64.StdEncoding.EncodeToString(data)
+		defer rc.Close()
+		raw, err := io.ReadAll(rc)
+		if err != nil {
+			return nil, err
+		}
+		info.Content = base64.StdEncoding.EncodeToString(raw)
 	}
 
 	return info, nil
 }
 
-// GetFileInfoByOldID retrieves complete information about a file by its old Cumulus ID
+// GetFileInfo retrieves complete information about a file.
+func (s *FileService) GetFileInfo(fileID string, extended bool) (*FileInfo, error) {
+	file, err := s.MetaStore.GetFile(fileID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: file_id=%s", ErrNotFound, fileID)
+		}
+		return nil, err
+	}
+	return s.buildFileInfo(file, extended)
+}
+
+// GetFileInfoByOldID retrieves complete information about a file by its old Cumulus ID.
 func (s *FileService) GetFileInfoByOldID(oldID int64, extended bool) (*FileInfo, error) {
 	file, err := s.MetaStore.GetFileByOldID(oldID)
 	if err != nil {
-		return nil, err
-	}
-
-	blob, err := s.MetaStore.GetBlob(file.BlobID)
-	if err != nil {
-		return nil, err
-	}
-
-	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
-	if err != nil {
-		return nil, err
-	}
-
-	var tags []string
-	if file.Tags != "" {
-		tags = strings.Split(file.Tags, ",")
-	}
-
-	info := &FileInfo{
-		ID:             file.ID,
-		Name:           file.Name,
-		BlobID:         file.BlobID,
-		OldCumulusID:   file.OldCumulusID,
-		ExpiresAt:      file.ExpiresAt,
-		CreatedAt:      file.CreatedAt,
-		Tags:           tags,
-		Hash:           blob.Hash,
-		SizeRaw:        blob.SizeRaw,
-		SizeCompressed: blob.SizeCompressed,
-		CompressionAlg: blob.CompressionAlg,
-		MimeType:       fileType.MimeType,
-		Category:       fileType.Category,
-		Subtype:        fileType.Subtype,
-	}
-
-	if extended {
-		data, _, _, err := s.DownloadFileByOldID(oldID)
-		if err != nil {
-			return nil, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: old_id=%d", ErrNotFound, oldID)
 		}
-		info.Content = base64.StdEncoding.EncodeToString(data)
+		return nil, err
 	}
-
-	return info, nil
+	return s.buildFileInfo(file, extended)
 }
 
 // DeleteFile deletes a file and updates storage stats

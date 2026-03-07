@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -34,28 +35,16 @@ type Store struct {
 func NewStore(dir string, maxDataFileSize int64) *Store {
 	_ = os.MkdirAll(dir, 0755)
 
-	// Find the latest volume ID
-	var currentVolumeID int64 = 1
-	for {
-		exists := false
-		// Check new format
-		if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("volume_%08d.dat", currentVolumeID))); err == nil {
-			exists = true
-		}
-		// Check legacy format
-		if !exists {
-			if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("volume_%d.dat", currentVolumeID))); err == nil {
-				exists = true
+	// Find the highest volume ID from existing volume files using Glob (O(1) instead of O(N) stat loop)
+	currentVolumeID := int64(1)
+	if matches, err := filepath.Glob(filepath.Join(dir, "volume_*.dat")); err == nil {
+		for _, match := range matches {
+			base := filepath.Base(match)
+			numStr := strings.TrimSuffix(strings.TrimPrefix(base, "volume_"), ".dat")
+			if id, err := strconv.ParseInt(numStr, 10, 64); err == nil && id > currentVolumeID {
+				currentVolumeID = id
 			}
 		}
-
-		if !exists {
-			if currentVolumeID > 1 {
-				currentVolumeID--
-			}
-			break
-		}
-		currentVolumeID++
 	}
 
 	return &Store{
@@ -206,15 +195,14 @@ func (s *Store) ReadFile(filename string) (io.ReadCloser, error) {
 
 // WriteBlob zapíše data do volume souboru
 // Returns: volumeID, offset, totalBytesWritten (including header and footer), error
-func (s *Store) WriteBlob(blobID int64, data []byte, compressionAlg uint8) (volumeID int64, offset int64, totalSize int64, err error) {
-	return s.WriteBlobWithMetadata(blobID, data, compressionAlg, nil)
+func (s *Store) WriteBlob(blobID int64, r io.Reader, size int64, compressionAlg uint8) (volumeID int64, offset int64, totalSize int64, err error) {
+	return s.WriteBlobWithMetadata(blobID, r, size, compressionAlg, nil)
 }
 
 // WriteBlobWithMetadata zapíše data do volume souboru s využitím DB metadat pro nalezení volume s místem
 // Returns: volumeID, offset, totalBytesWritten (including header and footer), error
-func (s *Store) WriteBlobWithMetadata(blobID int64, data []byte, compressionAlg uint8, meta *MetadataSQL) (volumeID int64, offset int64, totalSize int64, err error) {
-	dataSize := int64(len(data))
-	totalEntrySize := int64(HeaderSize) + dataSize + int64(FooterSize)
+func (s *Store) WriteBlobWithMetadata(blobID int64, r io.Reader, size int64, compressionAlg uint8, meta *MetadataSQL) (volumeID int64, offset int64, totalSize int64, err error) {
+	totalEntrySize := int64(HeaderSize) + size + int64(FooterSize)
 
 	// Find a volume with enough space (tries from volume 1 up to current)
 	// Skip locked volumes (e.g., being compacted) to avoid blocking
@@ -314,20 +302,21 @@ func (s *Store) WriteBlobWithMetadata(blobID int64, data []byte, compressionAlg 
 		offset = stat.Size()
 
 		// Write blob to the end of file
-		if err := s.writeBlobData(f, blobID, data, compressionAlg); err != nil {
+		crc, err := s.writeBlobData(f, blobID, r, size, compressionAlg)
+		if err != nil {
 			return 0, 0, 0, err
 		}
 
 		// Write to META file (Index)
 		metaFilename := strings.TrimSuffix(filename, ".dat") + ".meta"
 		metaPath := filepath.Join(s.BaseDir, metaFilename)
-		if err := s.writeMetaRecord(metaPath, blobID, offset, data, compressionAlg); err != nil {
+		if err := s.writeMetaRecord(metaPath, blobID, offset, size, compressionAlg, crc); err != nil {
 			return 0, 0, 0, err
 		}
 
 		// Update volumes table BEFORE releasing lock to ensure atomic check + update
 		// This prevents race condition where multiple goroutines read old size_total
-		totalBytesWritten := int64(HeaderSize) + int64(len(data)) + int64(FooterSize)
+		totalBytesWritten := int64(HeaderSize) + size + int64(FooterSize)
 		if meta != nil {
 			_, err := meta.db.Exec(`
 				INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, ?, 0)
@@ -348,7 +337,7 @@ func (s *Store) WriteBlobWithMetadata(blobID int64, data []byte, compressionAlg 
 	}
 
 	// Return actual bytes written (header + data + footer)
-	totalBytesWritten := int64(HeaderSize) + int64(len(data)) + int64(FooterSize)
+	totalBytesWritten := int64(HeaderSize) + size + int64(FooterSize)
 	return volumeID, offset, totalBytesWritten, nil
 }
 
@@ -442,43 +431,46 @@ func (s *Store) ReadBlob(volumeID int64, offset int64, size int64) ([]byte, erro
 	return data, nil
 }
 
-// writeBlobData writes the blob header, data, and footer to a file
-func (s *Store) writeBlobData(f *os.File, blobID int64, data []byte, compressionAlg uint8) error {
-	dataSize := int64(len(data))
-	crc := crc32.ChecksumIEEE(data)
-
+// writeBlobData streams r into f, prefixed with a header and suffixed with a CRC footer.
+// Returns the CRC32 of the written data so the caller can pass it to writeMetaRecord.
+func (s *Store) writeBlobData(f *os.File, blobID int64, r io.Reader, size int64, compressionAlg uint8) (uint32, error) {
 	// 1. HLAVIČKA
 	header := make([]byte, HeaderSize)
 	binary.BigEndian.PutUint32(header[0:4], uint32(MagicBytes))
 	header[4] = Version
 	header[5] = compressionAlg
-	binary.BigEndian.PutUint64(header[6:14], uint64(dataSize))
+	binary.BigEndian.PutUint64(header[6:14], uint64(size))
 	binary.BigEndian.PutUint64(header[14:22], uint64(blobID))
 
 	if _, err := f.Write(header); err != nil {
-		return err
+		return 0, err
 	}
 
-	// 2. DATA
-	if _, err := f.Write(data); err != nil {
-		return err
+	// 2. DATA – stream while computing CRC
+	h := crc32.NewIEEE()
+	written, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(r, size))
+	if err != nil {
+		return 0, fmt.Errorf("error writing blob data: %w", err)
 	}
+	if written != size {
+		return 0, fmt.Errorf("blob size mismatch: expected %d bytes, wrote %d", size, written)
+	}
+	crc := h.Sum32()
 
 	// 3. PATIČKA
 	footer := make([]byte, FooterSize)
 	binary.BigEndian.PutUint32(footer[0:4], crc)
 
 	if _, err := f.Write(footer); err != nil {
-		return err
+		return 0, err
 	}
 
-	return nil
+	return crc, nil
 }
 
-// writeMetaRecord writes a metadata record to the .meta file
-func (s *Store) writeMetaRecord(metaPath string, blobID int64, offset int64, data []byte, compressionAlg uint8) error {
-	crc := crc32.ChecksumIEEE(data)
-
+// writeMetaRecord writes a metadata record to the .meta file.
+// size and crc must already be known (computed during writeBlobData).
+func (s *Store) writeMetaRecord(metaPath string, blobID int64, offset int64, size int64, compressionAlg uint8, crc uint32) error {
 	mf, err := os.OpenFile(metaPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -489,7 +481,7 @@ func (s *Store) writeMetaRecord(metaPath string, blobID int64, offset int64, dat
 	metaRecord := make([]byte, 29)
 	binary.BigEndian.PutUint64(metaRecord[0:8], uint64(blobID))
 	binary.BigEndian.PutUint64(metaRecord[8:16], uint64(offset))
-	binary.BigEndian.PutUint64(metaRecord[16:24], uint64(len(data)))
+	binary.BigEndian.PutUint64(metaRecord[16:24], uint64(size))
 	metaRecord[24] = compressionAlg
 	binary.BigEndian.PutUint32(metaRecord[25:29], crc)
 
@@ -497,7 +489,8 @@ func (s *Store) writeMetaRecord(metaPath string, blobID int64, offset int64, dat
 	return err
 }
 
-// regenerateMetaFile regenerates the .meta file after compaction with updated offsets
+// regenerateMetaFile regenerates the .meta file after compaction with updated offsets.
+// Reads the actual blob data from the volume file to compute correct CRC32 values.
 func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 	// Get all blobs for this volume from database (with correct offsets after compaction)
 	rows, err := meta.db.Query(`
@@ -520,8 +513,16 @@ func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 		legacyName := fmt.Sprintf("volume_%d.dat", volumeID)
 		if _, err := os.Stat(filepath.Join(s.BaseDir, legacyName)); err == nil {
 			filename = legacyName
+			fullPath = filepath.Join(s.BaseDir, filename)
 		}
 	}
+
+	// Open volume file once to compute proper CRC32 values for each blob
+	datFile, err := os.Open(fullPath)
+	if err != nil {
+		return fmt.Errorf("failed to open volume file for CRC computation: %w", err)
+	}
+	defer datFile.Close()
 
 	metaFilename := strings.TrimSuffix(filename, ".dat") + ".meta"
 	metaPath := filepath.Join(s.BaseDir, metaFilename)
@@ -532,6 +533,8 @@ func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 		return err
 	}
 	defer mf.Close()
+
+	dataBuf := make([]byte, 0, 64*1024) // reusable; grown as needed
 
 	// Write all blob records with updated offsets
 	for rows.Next() {
@@ -550,10 +553,16 @@ func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 			compAlgCode = 2
 		}
 
-		// We need to calculate CRC from the actual data
-		// For now, write 0 as CRC (recovery tool doesn't strictly need it)
-		// TODO: Could read data and calculate proper CRC if needed
-		crc := uint32(0)
+		// Read compressed data to compute real CRC32
+		if int64(cap(dataBuf)) < sizeCompressed {
+			dataBuf = make([]byte, sizeCompressed)
+		} else {
+			dataBuf = dataBuf[:sizeCompressed]
+		}
+		if _, err := datFile.ReadAt(dataBuf, offset+int64(HeaderSize)); err != nil {
+			return fmt.Errorf("failed to read blob %d for CRC: %w", blobID, err)
+		}
+		crc := crc32.ChecksumIEEE(dataBuf)
 
 		// Formát: BlobID(8) + Offset(8) + Size(8) + Comp(1) + CRC(4) = 29 bytes
 		metaRecord := make([]byte, 29)

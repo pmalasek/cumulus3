@@ -87,14 +87,6 @@ func DetectFileType(data []byte) FileTypeResult {
 		}
 	}
 
-	// Ident file detection
-	if len(data) < 12000 {
-		text := string(data)
-		if !strings.Contains(text, "fake") {
-			return FileTypeResult{Type: "binary", Subtype: "Ident", ContentType: "application/octet-stream"}
-		}
-	}
-
 	// Text-based file detection
 	limit = 1000
 	if len(data) < limit {
@@ -115,6 +107,15 @@ func DetectFileType(data []byte) FileTypeResult {
 		matched, _ := regexp.MatchString(`C\d+(\.\d+)?`, textSample)
 		if matched {
 			return FileTypeResult{Type: "text", Subtype: "CAT", ContentType: "text/plain"}
+		}
+	}
+
+	// Ident file: ECU identification files – small, contain the word "ident" and are not fake.
+	// This check must come AFTER text-based detections so Cummins/CAT files are never misclassified.
+	if len(data) < 12000 {
+		text := strings.ToLower(string(data))
+		if strings.Contains(text, "ident") && !strings.Contains(text, "fake") {
+			return FileTypeResult{Type: "binary", Subtype: "Ident", ContentType: "application/octet-stream"}
 		}
 	}
 

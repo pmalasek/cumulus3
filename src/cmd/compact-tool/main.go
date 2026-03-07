@@ -127,13 +127,6 @@ func getConfig() (dbPath, dataDir string) {
 func listVolumes() {
 	dbPath, dataDir := getConfig()
 
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
-	if err != nil {
-		fmt.Printf("Error opening database: %v\n", err)
-		os.Exit(1)
-	}
-	defer db.Close()
-
 	metaStore, err := storage.NewMetadataSQL(dbPath)
 	if err != nil {
 		fmt.Printf("Error opening metadata store: %v\n", err)
