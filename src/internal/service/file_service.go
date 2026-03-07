@@ -3,8 +3,10 @@ package service
 import (
 	"bytes"
 	"compress/gzip"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -19,6 +21,9 @@ import (
 	"github.com/pmalasek/cumulus3/src/internal/utils"
 	"golang.org/x/crypto/blake2b"
 )
+
+// ErrNotFound is returned when a requested file or blob does not exist.
+var ErrNotFound = errors.New("not found")
 
 type FileService struct {
 	Store               *storage.Store
@@ -166,6 +171,9 @@ func (s *FileService) downloadFileRecord(file storage.File) (io.ReadCloser, int6
 func (s *FileService) DownloadFile(fileID string) (io.ReadCloser, int64, string, string, error) {
 	file, err := s.MetaStore.GetFile(fileID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, 0, "", "", fmt.Errorf("%w: file_id=%s", ErrNotFound, fileID)
+		}
 		utils.Info("SERVICE", " File not found in metadata: file_id=%s, error=%v", fileID, err)
 		return nil, 0, "", "", fmt.Errorf("file not found: %w", err)
 	}
@@ -177,6 +185,9 @@ func (s *FileService) DownloadFile(fileID string) (io.ReadCloser, int64, string,
 func (s *FileService) DownloadFileByOldID(oldID int64) (io.ReadCloser, int64, string, string, error) {
 	file, err := s.MetaStore.GetFileByOldID(oldID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, 0, "", "", fmt.Errorf("%w: old_id=%d", ErrNotFound, oldID)
+		}
 		return nil, 0, "", "", fmt.Errorf("file not found: %w", err)
 	}
 	return s.downloadFileRecord(file)
@@ -492,7 +503,7 @@ func (s *FileService) saveFile(filename string, blobID int64, oldCumulusID *int6
 	return fileID, nil
 }
 
-// mergeTags merges two tag strings, removing duplicates
+// mergeTags merges two JSON-encoded tag strings, deduplicating entries.
 func mergeTags(existingTags, newTags string) string {
 	if existingTags == "" {
 		return newTags
@@ -501,29 +512,23 @@ func mergeTags(existingTags, newTags string) string {
 		return existingTags
 	}
 
-	// Parse existing tags
-	tagSet := make(map[string]bool)
-	for _, tag := range strings.Split(existingTags, ",") {
-		tag = strings.TrimSpace(tag)
+	tagSet := make(map[string]struct{})
+	for _, tag := range storage.TagsFromJSON(existingTags) {
 		if tag != "" {
-			tagSet[tag] = true
+			tagSet[tag] = struct{}{}
+		}
+	}
+	for _, tag := range storage.TagsFromJSON(newTags) {
+		if tag != "" {
+			tagSet[tag] = struct{}{}
 		}
 	}
 
-	// Add new tags
-	for _, tag := range strings.Split(newTags, ",") {
-		tag = strings.TrimSpace(tag)
-		if tag != "" {
-			tagSet[tag] = true
-		}
-	}
-
-	// Convert back to comma-separated string
-	var tags []string
+	merged := make([]string, 0, len(tagSet))
 	for tag := range tagSet {
-		tags = append(tags, tag)
+		merged = append(merged, tag)
 	}
-	return strings.Join(tags, ",")
+	return storage.TagsToJSON(merged)
 }
 
 type FileInfo struct {
@@ -558,7 +563,7 @@ func (s *FileService) buildFileInfo(file storage.File, extended bool) (*FileInfo
 
 	var tags []string
 	if file.Tags != "" {
-		tags = strings.Split(file.Tags, ",")
+		tags = storage.TagsFromJSON(file.Tags)
 	}
 
 	info := &FileInfo{
@@ -598,6 +603,9 @@ func (s *FileService) buildFileInfo(file storage.File, extended bool) (*FileInfo
 func (s *FileService) GetFileInfo(fileID string, extended bool) (*FileInfo, error) {
 	file, err := s.MetaStore.GetFile(fileID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: file_id=%s", ErrNotFound, fileID)
+		}
 		return nil, err
 	}
 	return s.buildFileInfo(file, extended)
@@ -607,6 +615,9 @@ func (s *FileService) GetFileInfo(fileID string, extended bool) (*FileInfo, erro
 func (s *FileService) GetFileInfoByOldID(oldID int64, extended bool) (*FileInfo, error) {
 	file, err := s.MetaStore.GetFileByOldID(oldID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: old_id=%d", ErrNotFound, oldID)
+		}
 		return nil, err
 	}
 	return s.buildFileInfo(file, extended)
