@@ -389,6 +389,13 @@ func (m *MetadataSQL) GetFileByOldID(oldID int64) (File, error) {
 	return f, nil
 }
 
+// GetMaxOldCumulusID returns the current maximum old_cumulus_id from the files table, or 0 if no rows exist.
+func (m *MetadataSQL) GetMaxOldCumulusID() (int64, error) {
+	var maxID int64
+	err := m.db.QueryRow("SELECT COALESCE(MAX(old_cumulus_id), 0) FROM files").Scan(&maxID)
+	return maxID, err
+}
+
 // FindFileByBlobAndName finds an existing file with the same blob_id, filename, old_cumulus_id, and expiresAt.
 // SQLite's IS operator provides null-safe equality, so a single query covers all four nil/non-nil combinations.
 func (m *MetadataSQL) FindFileByBlobAndName(blobID int64, filename string, oldCumulusID *int64, expiresAt *time.Time) (*File, error) {

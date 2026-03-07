@@ -46,15 +46,17 @@ func NewFileService(store *storage.Store, metaStore *storage.MetadataSQL, logger
 
 // UploadFile handles the entire file upload process: streaming, compression, deduplication, and metadata storage
 func (s *FileService) UploadFile(file io.Reader, filename string, contentType string, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, error) {
-	id, _, err := s.UploadFileWithDedup(file, filename, contentType, oldCumulusID, expiresAt, tags)
+	id, _, _, err := s.UploadFileWithDedup(file, filename, contentType, oldCumulusID, expiresAt, tags)
 	return id, err
 }
 
-// UploadFileWithDedup handles the entire file upload process and returns deduplication status
-func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, contentType string, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, bool, error) {
+// UploadFileWithDedup handles the entire file upload process and returns deduplication status.
+// If oldCumulusID is nil, the highest existing old_cumulus_id is found in the database, incremented by 1,
+// and used as the new value. The assigned old_cumulus_id is returned as the second return value.
+func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, contentType string, oldCumulusID *int64, expiresAt *time.Time, tags string) (string, int64, bool, error) {
 	result, err := s.processStream(file)
 	if err != nil {
-		return "", false, err
+		return "", 0, false, err
 	}
 	defer result.cleanup()
 
@@ -88,18 +90,31 @@ func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, conte
 	blobID, isDedup, err := s.saveBlob(result.hash, finalFile, result.sizeRaw, sizeCompressed, alg, fileType)
 	if err != nil {
 		utils.Info("SERVICE", "ERROR saving blob: hash=%s, error=%v", result.hash, err)
-		return "", false, err
+		return "", 0, false, err
 	}
 
 	if isDedup {
 		utils.Info("SERVICE", "Deduplication hit: hash=%s, blob_id=%d", result.hash, blobID)
 	}
 
+	// Auto-assign old_cumulus_id when caller did not provide one
+	if oldCumulusID == nil {
+		maxID, err := s.MetaStore.GetMaxOldCumulusID()
+		if err != nil {
+			utils.Info("SERVICE", "ERROR getting max old_cumulus_id: %v", err)
+			return "", 0, false, err
+		}
+		autoID := maxID + 1
+		oldCumulusID = &autoID
+		utils.Info("SERVICE", "Auto-assigned old_cumulus_id=%d for filename=%s", autoID, filename)
+	}
+
 	fileID, err := s.saveFile(filename, blobID, oldCumulusID, expiresAt, tags)
 	if err != nil {
 		utils.Info("SERVICE", "ERROR saving file metadata: filename=%s, blob_id=%d, error=%v", filename, blobID, err)
+		return "", 0, false, err
 	}
-	return fileID, isDedup, err
+	return fileID, *oldCumulusID, isDedup, err
 }
 
 // decompressBlob returns a streaming reader that decompresses data according to alg.

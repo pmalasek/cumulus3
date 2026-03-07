@@ -149,7 +149,7 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call FileService
-	fileID, isDedup, err := s.FileService.UploadFileWithDedup(file, cleanFilename, contentType, oldCumulusID, expiresAt, tagsStr)
+	fileID, assignedOldID, isDedup, err := s.FileService.UploadFileWithDedup(file, cleanFilename, contentType, oldCumulusID, expiresAt, tagsStr)
 	if err != nil {
 		uploadOpsTotal.WithLabelValues("error", fileTypeLabel).Inc()
 		utils.Info("UPLOAD", "ERROR: filename=%s, remote=%s, error=%v", cleanFilename, r.RemoteAddr, err)
@@ -166,7 +166,7 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"fileID": fileID, "cumulusID": fmt.Sprintf("%v", oldCumulusID)})
+	json.NewEncoder(w).Encode(map[string]string{"fileID": fileID, "cumulusID": fmt.Sprintf("%d", assignedOldID)})
 }
 
 func (s *Server) HandleDownloadFunc(w http.ResponseWriter, r *http.Request, path string) {
