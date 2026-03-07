@@ -60,17 +60,19 @@ func ResizeImage(data []byte, mimeType string, size ImageSize) ([]byte, error) {
 		Rotate:  bimg.D0, // Auto-rotation je řešena automaticky v libvips
 	}
 
-	// Určení výstupního formátu
+	// PNG output format selection:
+	// - thumb (≤150): PNG keeps crisp edges and transparency
+	// - sm (400), md (800), lg (1200): PNG preserved for lossless quality
+	// - everything else (non-PNG inputs): JPEG for smaller files
 	isPNG := strings.Contains(mimeType, "png")
 
-	// PNG thumbnaily ponecháme jako PNG pro lepší kvalitu
 	if isPNG && size.Width <= 150 {
 		options.Type = bimg.PNG
-	} else if isPNG && size.Width > 400 {
-		// Větší PNG ponecháme jako PNG
+	} else if isPNG && size.Width >= 400 {
+		// sm, md, lg – keep PNG lossless
 		options.Type = bimg.PNG
 	} else {
-		// JPEG pro ostatní (rychlejší a menší)
+		// JPEG for non-PNG inputs
 		options.Type = bimg.JPEG
 	}
 
