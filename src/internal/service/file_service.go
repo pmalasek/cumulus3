@@ -97,49 +97,42 @@ func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, conte
 	return fileID, isDedup, err
 }
 
-// decompressBlob decompresses raw blob bytes according to the stored compression algorithm.
-func decompressBlob(data []byte, alg string) ([]byte, error) {
+// decompressBlob returns a streaming reader that decompresses data according to alg.
+// The caller must close the returned ReadCloser.
+func decompressBlob(data []byte, alg string) (io.ReadCloser, error) {
 	switch alg {
 	case "gzip":
-		reader, err := gzip.NewReader(bytes.NewReader(data))
+		r, err := gzip.NewReader(bytes.NewReader(data))
 		if err != nil {
 			return nil, fmt.Errorf("gzip error: %w", err)
 		}
-		defer reader.Close()
-		out, err := io.ReadAll(reader)
-		if err != nil {
-			return nil, fmt.Errorf("gzip read error: %w", err)
-		}
-		return out, nil
+		return r, nil
 	case "zstd":
-		decoder, err := zstd.NewReader(bytes.NewReader(data))
+		d, err := zstd.NewReader(bytes.NewReader(data))
 		if err != nil {
 			return nil, fmt.Errorf("zstd error: %w", err)
 		}
-		defer decoder.Close()
-		out, err := io.ReadAll(decoder)
-		if err != nil {
-			return nil, fmt.Errorf("zstd read error: %w", err)
-		}
-		return out, nil
+		// *zstd.Decoder.Close() has no return value, so wrap in NopCloser
+		return io.NopCloser(d), nil
 	case "none", "":
-		return data, nil
+		return io.NopCloser(bytes.NewReader(data)), nil
 	default:
 		return nil, fmt.Errorf("unknown compression algorithm: %s", alg)
 	}
 }
 
 // downloadFileRecord fetches the blob for an already-resolved File record, reads and
-// decompresses it, and returns the raw bytes together with the filename and MIME type.
-func (s *FileService) downloadFileRecord(file storage.File) ([]byte, string, string, error) {
+// decompresses it, and returns a streaming reader together with the raw size, filename and MIME type.
+// The caller must close the returned ReadCloser.
+func (s *FileService) downloadFileRecord(file storage.File) (io.ReadCloser, int64, string, string, error) {
 	blob, err := s.MetaStore.GetBlob(file.BlobID)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("blob not found: %w", err)
+		return nil, 0, "", "", fmt.Errorf("blob not found: %w", err)
 	}
 
 	fileType, err := s.MetaStore.GetFileType(blob.FileTypeID)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("file type not found: %w", err)
+		return nil, 0, "", "", fmt.Errorf("file type not found: %w", err)
 	}
 
 	utils.Info("SERVICE", " FileType from DB: file_id=%s, mime=%s, category=%s, subtype=%s",
@@ -151,12 +144,12 @@ func (s *FileService) downloadFileRecord(file storage.File) ([]byte, string, str
 	if err != nil {
 		utils.Info("SERVICE", " ERROR reading blob from storage: file_id=%s, blob_id=%d, volume=%d, offset=%d, size=%d, error=%v",
 			file.ID, file.BlobID, blob.VolumeID, blob.Offset, blob.SizeCompressed, err)
-		return nil, "", "", fmt.Errorf("error reading blob: %w", err)
+		return nil, 0, "", "", fmt.Errorf("error reading blob: %w", err)
 	}
 
-	decompressed, err := decompressBlob(data, blob.CompressionAlg)
+	rc, err := decompressBlob(data, blob.CompressionAlg)
 	if err != nil {
-		return nil, "", "", err
+		return nil, 0, "", "", err
 	}
 
 	mimeType := fileType.MimeType
@@ -165,24 +158,26 @@ func (s *FileService) downloadFileRecord(file storage.File) ([]byte, string, str
 		utils.Info("SERVICE", " Empty mime type from DB, using fallback: file_id=%s, fallback_mime=%s", file.ID, mimeType)
 	}
 
-	return decompressed, file.Name, mimeType, nil
+	return rc, blob.SizeRaw, file.Name, mimeType, nil
 }
 
 // DownloadFile retrieves a file by its ID, handling decompression if necessary.
-func (s *FileService) DownloadFile(fileID string) ([]byte, string, string, error) {
+// The caller must close the returned ReadCloser.
+func (s *FileService) DownloadFile(fileID string) (io.ReadCloser, int64, string, string, error) {
 	file, err := s.MetaStore.GetFile(fileID)
 	if err != nil {
 		utils.Info("SERVICE", " File not found in metadata: file_id=%s, error=%v", fileID, err)
-		return nil, "", "", fmt.Errorf("file not found: %w", err)
+		return nil, 0, "", "", fmt.Errorf("file not found: %w", err)
 	}
 	return s.downloadFileRecord(file)
 }
 
 // DownloadFileByOldID retrieves a file by its old Cumulus ID.
-func (s *FileService) DownloadFileByOldID(oldID int64) ([]byte, string, string, error) {
+// The caller must close the returned ReadCloser.
+func (s *FileService) DownloadFileByOldID(oldID int64) (io.ReadCloser, int64, string, string, error) {
 	file, err := s.MetaStore.GetFileByOldID(oldID)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("file not found: %w", err)
+		return nil, 0, "", "", fmt.Errorf("file not found: %w", err)
 	}
 	return s.downloadFileRecord(file)
 }
@@ -407,10 +402,8 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 	}
 
 	// 3. Write to storage
-	file.Seek(0, 0)
-	data, err := io.ReadAll(file)
-	if err != nil {
-		return 0, false, fmt.Errorf("error reading file for storage: %w", err)
+	if _, err := file.Seek(0, 0); err != nil {
+		return 0, false, fmt.Errorf("error seeking file for storage: %w", err)
 	}
 
 	compAlgCode := uint8(0)
@@ -422,7 +415,7 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 	}
 
 	// Use WriteBlobWithMetadata to check DB values for free space
-	volID, offset, actualSize, err := s.Store.WriteBlobWithMetadata(blobID, data, compAlgCode, s.MetaStore)
+	volID, offset, actualSize, err := s.Store.WriteBlobWithMetadata(blobID, file, sizeCompressed, compAlgCode, s.MetaStore)
 	if err != nil {
 		return 0, false, fmt.Errorf("storage error: %w", err)
 	}
@@ -586,11 +579,16 @@ func (s *FileService) buildFileInfo(file storage.File, extended bool) (*FileInfo
 	}
 
 	if extended {
-		data, _, _, err := s.downloadFileRecord(file)
+		rc, _, _, _, err := s.downloadFileRecord(file)
 		if err != nil {
 			return nil, err
 		}
-		info.Content = base64.StdEncoding.EncodeToString(data)
+		defer rc.Close()
+		raw, err := io.ReadAll(rc)
+		if err != nil {
+			return nil, err
+		}
+		info.Content = base64.StdEncoding.EncodeToString(raw)
 	}
 
 	return info, nil

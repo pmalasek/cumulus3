@@ -7,10 +7,12 @@ import (
 	"sync"
 )
 
-// MetadataLogger handles appending file metadata to a recovery log
+// MetadataLogger handles appending file metadata to a recovery log.
+// The underlying file is opened lazily and kept open to avoid repeated open/close overhead.
 type MetadataLogger struct {
 	LogPath string
 	mu      sync.Mutex
+	file    *os.File
 }
 
 // NewMetadataLogger creates a new logger instance
@@ -23,16 +25,38 @@ func NewMetadataLogger(baseDir string) *MetadataLogger {
 	}
 }
 
+// Close flushes and closes the underlying log file.
+// Should be called on server shutdown.
+func (l *MetadataLogger) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file != nil {
+		err := l.file.Close()
+		l.file = nil
+		return err
+	}
+	return nil
+}
+
+// openLocked opens the log file if not already open. Must be called with l.mu held.
+func (l *MetadataLogger) openLocked() error {
+	if l.file != nil {
+		return nil
+	}
+	var err error
+	l.file, err = os.OpenFile(l.LogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	return err
+}
+
 // LogFile appends the file metadata to the log file in binary format
 func (l *MetadataLogger) LogFile(f File) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	file, err := os.OpenFile(l.LogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
+	if err := l.openLocked(); err != nil {
 		return err
 	}
-	defer file.Close()
+	file := l.file
 
 	// Příprava dat do bufferu
 	// Odhad velikosti: ID(36) + BlobID(8) + Time(8) + Flags(1) + Opts(16) + NameLen(2) + Name(N)

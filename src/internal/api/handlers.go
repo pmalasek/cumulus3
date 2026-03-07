@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -181,7 +182,7 @@ func (s *Server) HandleDownloadFunc(w http.ResponseWriter, r *http.Request, path
 	}
 
 	utils.Info("DOWNLOAD", " Requesting file_id=%s, remote=%s", id, r.RemoteAddr)
-	data, filename, mimeType, err := s.FileService.DownloadFile(id)
+	rc, sizeRaw, filename, mimeType, err := s.FileService.DownloadFile(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			utils.Info("DOWNLOAD", " File not found: file_id=%s, remote=%s", id, r.RemoteAddr)
@@ -192,6 +193,7 @@ func (s *Server) HandleDownloadFunc(w http.ResponseWriter, r *http.Request, path
 		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer rc.Close()
 
 	w.Header().Set("Content-Type", mimeType)
 	encodedFilename := url.PathEscape(filename)
@@ -207,10 +209,10 @@ func (s *Server) HandleDownloadFunc(w http.ResponseWriter, r *http.Request, path
 	}
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Write(data)
-	RecordBlobBytesRead(len(data))
-	utils.Info("DOWNLOAD", " SUCCESS: file_id=%s, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
+	w.Header().Set("Content-Length", strconv.FormatInt(sizeRaw, 10))
+	n, _ := io.Copy(w, rc)
+	RecordBlobBytesRead(int(n))
+	utils.Info("DOWNLOAD", " SUCCESS: file_id=%s, filename=%s, size=%d, mime=%s, remote=%s", id, filename, sizeRaw, mimeType, r.RemoteAddr)
 }
 
 func (s *Server) HandleDownloadByOldIDFunc(w http.ResponseWriter, r *http.Request, path string) {
@@ -233,7 +235,7 @@ func (s *Server) HandleDownloadByOldIDFunc(w http.ResponseWriter, r *http.Reques
 	}
 
 	utils.Info("DOWNLOAD_OLD_ID", " Requesting old_id=%d, remote=%s", id, r.RemoteAddr)
-	data, filename, mimeType, err := s.FileService.DownloadFileByOldID(id)
+	rc, sizeRaw, filename, mimeType, err := s.FileService.DownloadFileByOldID(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			utils.Info("DOWNLOAD_OLD_ID", " File not found: old_id=%d, remote=%s", id, r.RemoteAddr)
@@ -244,6 +246,7 @@ func (s *Server) HandleDownloadByOldIDFunc(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer rc.Close()
 
 	w.Header().Set("Content-Type", mimeType)
 	encodedFilename := url.PathEscape(filename)
@@ -259,10 +262,10 @@ func (s *Server) HandleDownloadByOldIDFunc(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"; filename*=UTF-8''%s", disposition, filename, encodedFilename))
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Write(data)
-	RecordBlobBytesRead(len(data))
-	utils.Info("DOWNLOAD_OLD_ID", " SUCCESS: old_id=%d, filename=%s, size=%d, mime=%s, remote=%s", id, filename, len(data), mimeType, r.RemoteAddr)
+	w.Header().Set("Content-Length", strconv.FormatInt(sizeRaw, 10))
+	n, _ := io.Copy(w, rc)
+	RecordBlobBytesRead(int(n))
+	utils.Info("DOWNLOAD_OLD_ID", " SUCCESS: old_id=%d, filename=%s, size=%d, mime=%s, remote=%s", id, filename, sizeRaw, mimeType, r.RemoteAddr)
 }
 
 func (s *Server) HandleFileInfoFunc(w http.ResponseWriter, r *http.Request, path string) {
@@ -429,7 +432,7 @@ func (s *Server) HandleImageFunc(w http.ResponseWriter, r *http.Request, path st
 	utils.Info("IMAGE", " Requesting: uuid=%s, variant=%s, remote=%s", uuid, variant, r.RemoteAddr)
 
 	// Stáhneme originální soubor
-	data, filename, mimeType, err := s.FileService.DownloadFile(uuid)
+	rc, _, filename, mimeType, err := s.FileService.DownloadFile(uuid)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			utils.Info("IMAGE", " File not found: uuid=%s, remote=%s", uuid, r.RemoteAddr)
@@ -437,6 +440,14 @@ func (s *Server) HandleImageFunc(w http.ResponseWriter, r *http.Request, path st
 			return
 		}
 		utils.Info("IMAGE", " ERROR downloading: uuid=%s, remote=%s, error=%v", uuid, r.RemoteAddr, err)
+		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rc.Close()
+	// Image processing requires the full content in memory
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		utils.Info("IMAGE", " ERROR reading file: uuid=%s, remote=%s, error=%v", uuid, r.RemoteAddr, err)
 		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
