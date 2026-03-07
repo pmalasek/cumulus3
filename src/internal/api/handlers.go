@@ -104,6 +104,8 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			oldCumulusID = &id
 		}
+	} else {
+		utils.Info("UPLOAD", " No old_cumulus_id provided by %s", r.RemoteAddr)
 	}
 
 	var expiresAt *time.Time
@@ -160,7 +162,7 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"fileID": fileID})
+	json.NewEncoder(w).Encode(map[string]string{"fileID": fileID, "cumulusID": fmt.Sprintf("%v", oldCumulusID)})
 }
 
 func (s *Server) HandleDownloadFunc(w http.ResponseWriter, r *http.Request, path string) {
