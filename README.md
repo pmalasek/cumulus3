@@ -940,6 +940,12 @@ Cumulus3 supports gradual migration:
 
 See [MIGRATION.md](MIGRATION.md) for complete migration guide.
 
+## RUN
+
+```bash
+clear;go run src/cmd/migrate_cumulus/main.go -db-host 172.24.0.12 -db-user <USERNAME> -db-pass <PASSWORD> -db-name cumulus -files-path /mnt/nfs/cumulus/data -api-host localhost -api-port 8800 -workers 30 -limit 100000000
+```
+
 ## Documentation
 
 Comprehensive documentation available:
