@@ -69,6 +69,7 @@ func (s *Server) Routes() http.Handler {
 	username, password := GetAdminCredentials()
 	mux.Handle("/admin", AdminAuthMiddleware(username, password, http.HandlerFunc(s.HandleAdmin)))
 	mux.Handle("/admin/script.js", AdminAuthMiddleware(username, password, http.HandlerFunc(s.HandleAdminScript)))
+	mux.HandleFunc("/admin/icons/", s.HandleAdminIcons)
 
 	// Wrap with metrics middleware
 	return MetricsMiddleware(mux)

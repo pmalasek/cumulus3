@@ -4,9 +4,10 @@ import (
 	"embed"
 	"net/http"
 	"os"
+	"strings"
 )
 
-//go:embed static/*
+//go:embed static
 var staticFiles embed.FS
 
 // HandleAdmin serves the admin UI
@@ -17,6 +18,25 @@ func (s *Server) HandleAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(content)
+}
+
+// HandleAdminIcons serves favicon and icon files
+func (s *Server) HandleAdminIcons(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/admin/icons/")
+	content, err := staticFiles.ReadFile("static/icons/" + path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	switch {
+	case strings.HasSuffix(path, ".ico"):
+		w.Header().Set("Content-Type", "image/x-icon")
+	case strings.HasSuffix(path, ".png"):
+		w.Header().Set("Content-Type", "image/png")
+	case strings.HasSuffix(path, ".webmanifest"):
+		w.Header().Set("Content-Type", "application/manifest+json")
+	}
 	w.Write(content)
 }
 
