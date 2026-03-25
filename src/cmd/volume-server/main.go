@@ -132,7 +132,9 @@ func main() {
 
 	// 1. Inicializace složky pro data
 	dbDir := filepath.Dir(dbPath)
-	os.MkdirAll(dbDir, 0755)
+	if err := os.MkdirAll(dbDir, 0755); err != nil {
+		panic("Nelze vytvořit adresář pro DB: " + err.Error())
+	}
 
 	// 2. Start Metadata DB (SQLite)
 	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_sync=NORMAL", dbPath)
