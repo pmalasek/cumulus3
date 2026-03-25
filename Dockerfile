@@ -53,6 +53,10 @@ RUN addgroup -g 1000 cumulus && \
 COPY --from=builder /app/build/* /app/
 COPY --from=builder /app/docs /app/docs
 
+# Kopírování .env souboru pokud existuje
+RUN --mount=type=bind,from=builder,source=/app,target=/mnt/builder \
+    if [ -f /mnt/builder/.env ]; then cp /mnt/builder/.env /app/.env && chown cumulus:cumulus /app/.env; fi
+
 # Přepnutí na neprivilegovaného uživatele
 USER cumulus
 
