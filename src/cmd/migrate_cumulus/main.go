@@ -72,7 +72,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -workers int\n")
 		fmt.Fprintf(os.Stderr, "        Number of parallel workers for migration (default: 10)\n")
 		fmt.Fprintf(os.Stderr, "  -limit int\n")
-		fmt.Fprintf(os.Stderr, "        Maximum number of files to migrate (default: 10000)\n\n")
+		fmt.Fprintf(os.Stderr, "        Maximum number of files to migrate (0 = no limit, default: 0)\n")
+		fmt.Fprintf(os.Stderr, "  -reverse\n")
+		fmt.Fprintf(os.Stderr, "        Process files from newest to oldest (by ID DESC); useful for incremental top-up migrations\n\n")
 		fmt.Fprintf(os.Stderr, "Examples:\n")
 		fmt.Fprintf(os.Stderr, "  %s -db-host 192.168.1.100 -db-user cumulus -db-name cumulus_old -files-path /mnt/files\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -db-host localhost -db-user root -db-pass secret -db-name cumulus \\\n", os.Args[0])
@@ -91,7 +93,8 @@ func main() {
 	apiHost := flag.String("api-host", "localhost", "Cumulus API host IP")
 	apiPort := flag.Int("api-port", 8080, "Cumulus API port")
 	workers := flag.Int("workers", 10, "Number of parallel workers")
-	limit := flag.Int("limit", 10000, "Maximum number of files to migrate")
+	limit := flag.Int("limit", 0, "Maximum number of files to migrate (0 = no limit)")
+	reverse := flag.Bool("reverse", false, "Process files from newest to oldest (ID DESC)")
 	testOnly := flag.Bool("test-only", false, "Test mode: compare old and new Cumulus without migration")
 
 	flag.Parse()
@@ -117,6 +120,14 @@ func main() {
 	apiURL := fmt.Sprintf("http://%s:%d/v2/files/upload", *apiHost, *apiPort)
 
 	// Execute Query
+	orderDir := "ASC"
+	if *reverse {
+		orderDir = "DESC"
+	}
+	limitClause := ""
+	if *limit > 0 {
+		limitClause = fmt.Sprintf("LIMIT %d", *limit)
+	}
 	query := fmt.Sprintf(`
         SELECT
             f.id,
@@ -131,9 +142,9 @@ func main() {
                 LEFT JOIN labels l ON l.id = lfl.label_id
         where rf.id is not null
         group by f.id
-        ORDER BY f.id ASC
-        LIMIT %d;
-    `, *limit)
+        ORDER BY f.id %s
+        %s;
+    `, orderDir, limitClause)
 
 	rows, err := db.Query(query)
 	if err != nil {
