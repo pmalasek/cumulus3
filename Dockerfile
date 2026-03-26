@@ -21,7 +21,7 @@ COPY . .
 
 # Generování swagger dokumentace
 RUN go install github.com/swaggo/swag/cmd/swag@latest && \
-    swag init -g src/cmd/volume-server/main.go -d src/cmd/volume-server,src/internal/api --parseGoList=false
+    swag init -g main.go -d src/cmd/volume-server,src/internal/api,src/internal/service --parseGoList=false --parseInternal
 
 # Build všech binárních souborů
 RUN mkdir -p build && \
