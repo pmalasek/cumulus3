@@ -247,7 +247,7 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=SecurePassword123
 
 # Standard configuration (already existing)
-DB_PATH=./data/database/cumulus3.db
+DB_SQLITE_PATH=./data/database/cumulus3.db
 DATA_DIR=./data/volumes
 SERVER_PORT=8800
 SERVER_ADDRESS=0.0.0.0

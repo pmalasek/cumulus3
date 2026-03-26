@@ -61,7 +61,7 @@ func printStartupConfiguration() {
 
 	// Define configuration parameters to display
 	configParams := []string{
-		"DB_PATH",
+		"DB_SQLITE_PATH",
 		"DATA_DIR",
 		"DATA_FILE_SIZE",
 		"MAX_UPLOAD_FILE_SIZE",
@@ -100,7 +100,7 @@ func main() {
 
 	utils.Info("STARTUP", "Cumulus3 starting up, log level: %s", utils.GetLogLevel())
 
-	dbPath := os.Getenv("DB_PATH")
+	dbPath := os.Getenv("DB_SQLITE_PATH")
 	if dbPath == "" {
 		dbPath = "./data/database/cumulus3.db"
 	}

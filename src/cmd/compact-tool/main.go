@@ -50,7 +50,7 @@ func printUsage() {
 	fmt.Println("  compact-tool help                            - Show this help")
 	fmt.Println()
 	fmt.Println("Environment variables:")
-	fmt.Println("  DB_PATH   - Path to SQLite database (default: ./data/database/cumulus3.db)")
+	fmt.Println("  DB_SQLITE_PATH   - Path to SQLite database (default: ./data/database/cumulus3.db)")
 	fmt.Println("  DATA_DIR  - Path to volume directory (default: ./data/volumes)")
 	fmt.Println()
 	fmt.Println("Notes:")
@@ -111,7 +111,7 @@ func handleDBCommand() {
 }
 
 func getConfig() (dbPath, dataDir string) {
-	dbPath = os.Getenv("DB_PATH")
+	dbPath = os.Getenv("DB_SQLITE_PATH")
 	if dbPath == "" {
 		dbPath = "./data/database/cumulus3.db"
 	}

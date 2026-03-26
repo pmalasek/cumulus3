@@ -58,7 +58,7 @@ SERVER_ADDRESS=0.0.0.0
 SERVER_PORT=8800
 
 # Cesty k datům (ve Docker kontejneru)
-DB_PATH=/app/data/database/cumulus3.db
+DB_SQLITE_PATH=/app/data/database/cumulus3.db
 DATA_DIR=/app/data/volumes
 
 # Úložiště - upravte dle potřeby!
@@ -271,7 +271,7 @@ Otevřete v prohlížeči:
 | `SERVER_ADDRESS` | `0.0.0.0` | IP adresa serveru |
 | `SERVER_PORT` | `8800` | Port serveru |
 | `SWAGGER_HOST` | - | Host pro Swagger UI (prázdné = použije se aktuální URL) |
-| `DB_PATH` | `/app/data/database/cumulus3.db` | Cesta k databázi |
+| `DB_SQLITE_PATH` | `/app/data/database/cumulus3.db` | Cesta k databázi |
 | `DATA_DIR` | `/app/data/volumes` | Adresář pro volume soubory |
 | `DATA_FILE_SIZE` | `100MB` | Max. velikost jednoho volume |
 | `MAX_UPLOAD_FILE_SIZE` | `50MB` | Max. velikost uploadu |

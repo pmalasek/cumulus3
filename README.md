@@ -615,7 +615,7 @@ SERVER_ADDRESS=0.0.0.0          # Bind address (0.0.0.0 for all interfaces)
 SERVER_PORT=8800                # HTTP port
 
 # Storage Configuration
-DB_PATH=/app/data/database/cumulus3.db  # SQLite database path
+DB_SQLITE_PATH=/app/data/database/cumulus3.db  # SQLite database path
 DATA_DIR=/app/data/volumes      # Volume files directory
 DATA_FILE_SIZE=10GB             # Maximum size per volume file
 MAX_UPLOAD_FILE_SIZE=500MB      # Maximum upload size

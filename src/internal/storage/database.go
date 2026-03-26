@@ -231,8 +231,8 @@ func (m *MetadataSQL) GetExpiredTemporaryFiles() ([]string, int, error) {
 	query := `
 		SELECT id
 		FROM files
-		WHERE expires_at IS NOT NULL 
-		  AND expires_at < datetime('now', 'localtime')
+		WHERE expires_at IS NOT NULL
+			AND expires_at < datetime('now', 'localtime')
 	`
 
 	rows, err := m.db.Query(query)
@@ -405,9 +405,9 @@ func (m *MetadataSQL) FindFileByBlobNameAndExpiry(blobID int64, filename string,
 	}
 
 	const query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags
-	               FROM files
-	               WHERE blob_id = ? AND name = ? AND expires_at IS ?
-	               LIMIT 1`
+					FROM files
+					WHERE blob_id = ? AND name = ? AND expires_at IS ?
+					LIMIT 1`
 
 	var f File
 	err := m.db.QueryRow(query, blobID, filename, expAt).Scan(
@@ -434,9 +434,9 @@ func (m *MetadataSQL) FindFileByBlobAndName(blobID int64, filename string, oldCu
 	}
 
 	const query = `SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags
-	               FROM files
-	               WHERE blob_id = ? AND name = ? AND old_cumulus_id IS ? AND expires_at IS ?
-	               LIMIT 1`
+					FROM files
+					WHERE blob_id = ? AND name = ? AND old_cumulus_id IS ? AND expires_at IS ?
+					LIMIT 1`
 
 	var f File
 	err := m.db.QueryRow(query, blobID, filename, oldID, expAt).Scan(
