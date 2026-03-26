@@ -296,7 +296,8 @@ Cumulus3 is ideal for:
    # Build maintenance tools
    go build -o build/compact-tool ./src/cmd/compact-tool
    go build -o build/recovery-tool ./src/cmd/recovery-tool
-   go build -o build/rebuild-db ./src/cmd/rebuild-db
+    go build -o build/rebuild-db ./src/cmd/rebuild-db
+    go build -o build/sqlite2pg ./src/cmd/sqlite2pg
    ```
 
 5. **Run the server:**
@@ -635,6 +636,8 @@ CLEANUP_INTERVAL=1h             # How often to check for expired files
 SWAGGER_HOST=localhost:8800     # Host for Swagger UI
 ```
 
+> **Critical warning:** SQLite database files must **never** be stored on network filesystems or network shares such as **NFS, SMB/CIFS, NAS mounts, or similar remote storage**. SQLite locking and WAL semantics are not reliable there and can lead to corruption, locked databases, or silent data loss. If your data lives on network storage, use `DATABASE_TYPE=postgresql` and keep SQLite only on a local disk.
+
 ### Size Format
 
 Size values support human-readable formats:
@@ -790,6 +793,27 @@ PG_DATABASE_URL=postgresql://user:pass@localhost:5432/cumulus3 \
 ```
 
 See [REBUILD-DB.md](REBUILD-DB.md) for detailed recovery procedures.
+
+### SQLite → PostgreSQL Migration Tool
+
+Copy metadata directly from the live SQLite schema into PostgreSQL while preserving IDs, hashes, tags, timestamps, and relationships:
+
+```bash
+# target PostgreSQL must be empty, or use -truncate
+PG_DATABASE_URL=postgresql://user:pass@localhost:5432/cumulus3?sslmode=disable \
+./build/sqlite2pg --sqlite-path ./data/database/cumulus3.db
+
+# or wipe target tables first
+PG_DATABASE_URL=postgresql://user:pass@localhost:5432/cumulus3?sslmode=disable \
+./build/sqlite2pg --sqlite-path ./data/database/cumulus3.db --truncate
+```
+
+Recommended procedure:
+
+- stop writes to the application first
+- back up the SQLite database file
+- migrate into an empty PostgreSQL database
+- verify the application against PostgreSQL before the final switch
 
 ## Monitoring and Observability
 

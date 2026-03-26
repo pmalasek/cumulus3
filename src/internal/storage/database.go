@@ -166,7 +166,6 @@ func (m *MetadataSQL) initSQLiteSchema() error {
 		`CREATE INDEX IF NOT EXISTS idx_files_blob_name_expires ON files(blob_id, name, expires_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_blob_name_old_expires ON files(blob_id, name, old_cumulus_id, expires_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_blobs_volume_id ON blobs(volume_id);`,
-		`CREATE INDEX IF NOT EXISTS idx_blobs_volume_offset ON blobs(volume_id, blob_offset);`,
 		`CREATE INDEX IF NOT EXISTS idx_blobs_id ON blobs(id);`,
 	}
 
@@ -178,9 +177,66 @@ func (m *MetadataSQL) initSQLiteSchema() error {
 
 	// Migration: Add tags column if not exists
 	_, _ = m.db.Exec("ALTER TABLE files ADD COLUMN tags TEXT")
-	// Migration: rename reserved column name offset -> blob_offset if needed
-	_, _ = m.db.Exec("ALTER TABLE blobs RENAME COLUMN offset TO blob_offset")
 
+	// Migration: ensure blob_offset column exists on legacy databases
+	if err := m.ensureSQLiteBlobOffsetColumn(); err != nil {
+		return err
+	}
+
+	// Index depending on blob_offset must be created after migration above
+	if _, err := m.db.Exec(`CREATE INDEX IF NOT EXISTS idx_blobs_volume_offset ON blobs(volume_id, blob_offset);`); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *MetadataSQL) sqliteColumnExists(tableName, columnName string) (bool, error) {
+	query := fmt.Sprintf("SELECT 1 FROM pragma_table_info('%s') WHERE name = ? LIMIT 1", tableName)
+	var exists int
+	err := m.db.QueryRow(query, columnName).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m *MetadataSQL) ensureSQLiteBlobOffsetColumn() error {
+	hasBlobOffset, err := m.sqliteColumnExists("blobs", "blob_offset")
+	if err != nil {
+		return fmt.Errorf("failed to check blobs.blob_offset existence: %w", err)
+	}
+	if hasBlobOffset {
+		return nil
+	}
+
+	hasOffset, err := m.sqliteColumnExists("blobs", "offset")
+	if err != nil {
+		return fmt.Errorf("failed to check blobs.offset existence: %w", err)
+	}
+
+	if hasOffset {
+		// Prefer proper rename when supported by SQLite.
+		if _, err := m.db.Exec("ALTER TABLE blobs RENAME COLUMN offset TO blob_offset"); err == nil {
+			return nil
+		}
+
+		// Fallback for SQLite variants without RENAME COLUMN support.
+		if _, err := m.db.Exec("ALTER TABLE blobs ADD COLUMN blob_offset INTEGER"); err != nil {
+			return fmt.Errorf("failed to add blobs.blob_offset column: %w", err)
+		}
+		if _, err := m.db.Exec("UPDATE blobs SET blob_offset = offset WHERE blob_offset IS NULL"); err != nil {
+			return fmt.Errorf("failed to backfill blobs.blob_offset: %w", err)
+		}
+		return nil
+	}
+
+	if _, err := m.db.Exec("ALTER TABLE blobs ADD COLUMN blob_offset INTEGER"); err != nil {
+		return fmt.Errorf("failed to add missing blobs.blob_offset column: %w", err)
+	}
 	return nil
 }
 
@@ -417,13 +473,26 @@ func (m *MetadataSQL) GetBlobIDByHash(hash string) (int64, bool, error) {
 	return id, true, nil
 }
 
-func (m *MetadataSQL) CreateBlob(hash string) (int64, error) {
-	query := m.buildQuery(`INSERT INTO blobs (hash) VALUES (?)`)
-	res, err := m.db.Exec(query, hash)
+func (m *MetadataSQL) insertAndReturnID(insertQuery string, args ...any) (int64, error) {
+	if m.dbType == "postgresql" {
+		query := m.buildQuery(insertQuery + ` RETURNING id`)
+		var id int64
+		if err := m.db.QueryRow(query, args...).Scan(&id); err != nil {
+			return 0, err
+		}
+		return id, nil
+	}
+
+	query := m.buildQuery(insertQuery)
+	res, err := m.db.Exec(query, args...)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+func (m *MetadataSQL) CreateBlob(hash string) (int64, error) {
+	return m.insertAndReturnID(`INSERT INTO blobs (hash) VALUES (?)`, hash)
 }
 
 // CreateBlobWithID creates a blob with a specific ID (for database rebuild)
@@ -509,8 +578,7 @@ func (m *MetadataSQL) GetOrCreateFileType(mimeType, category, subtype string) (i
 	}
 
 	// If not found, insert new
-	insertQuery := m.buildQuery("INSERT INTO file_types (mime_type, category, subtype) VALUES (?, ?, ?)")
-	res, err := m.db.Exec(insertQuery, mimeType, category, subtype)
+	id, err = m.insertAndReturnID("INSERT INTO file_types (mime_type, category, subtype) VALUES (?, ?, ?)", mimeType, category, subtype)
 	if err != nil {
 		// If insert fails (race condition or constraint), try to select again
 		err2 := m.db.QueryRow(query, mimeType, category, subtype).Scan(&id)
@@ -519,7 +587,7 @@ func (m *MetadataSQL) GetOrCreateFileType(mimeType, category, subtype string) (i
 		}
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 func (m *MetadataSQL) FileExistsByOldID(oldID int64) (bool, error) {
