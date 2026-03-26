@@ -3,7 +3,7 @@
 ## Regenerate Swagger
 
 ```bash
-swag init -g src/cmd/volume-server/main.go
+swag init -g src/cmd/volume-server/main.go -d src/cmd/volume-server,src/internal/api --parseGoList=false
 ```
 
 ## Run with Hot-Reload
