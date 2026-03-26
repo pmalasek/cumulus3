@@ -66,12 +66,45 @@ services:
     tmpfs:
       - /tmp
 
+  postgresql:
+    image: postgres:16-alpine
+    container_name: cumulus3-postgresql
+    restart: always
+
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-cumulus3}
+      - POSTGRES_USER=${POSTGRES_USER:-cumulus3_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-cumulus3_password}
+
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cumulus3_user} -d ${POSTGRES_DB:-cumulus3}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    networks:
+      - cumulus3-network
+
 volumes:
   cumulus3-data:
     driver: local
     driver_opts:
       type: none
       device: /mnt/nfs/cumulus3
+      o: bind
+
+  postgres-data:
+    driver: local
+    driver_opts:
+      type: none
+      device: /mnt/nfs/cumulus3/pg_db
       o: bind
 
 networks:
