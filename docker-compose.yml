@@ -6,53 +6,61 @@ services:
     image: cumulus3:latest
     container_name: cumulus3
     restart: always
-    
+
     ports:
       - "${SERVER_PORT:-8800}:8800"
-    
+
     env_file:
       - .env
-    
+
     environment:
       # Logování - přepíše hodnoty z .env pokud jsou nastaveny
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_COLOR=false
-    
+
     volumes:
       # Persistentní úložiště pro databázi a data
       - cumulus3-data:/app/data
-    
+
     deploy:
       resources:
         limits:
-          cpus: '4'
+          cpus: "4"
           memory: 4G
         reservations:
-          cpus: '1'
+          cpus: "1"
           memory: 1G
       restart_policy:
         condition: on-failure
         delay: 5s
         max_attempts: 3
         window: 120s
-    
+
     logging:
       driver: "json-file"
       options:
         max-size: "20m"
         max-file: "5"
         compress: "true"
-    
+
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8800/health"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8800/health",
+        ]
       interval: 20s
       timeout: 5s
       retries: 5
       start_period: 15s
-    
+
     networks:
       - cumulus3-network
-    
+
     security_opt:
       - no-new-privileges:true
     tmpfs:
