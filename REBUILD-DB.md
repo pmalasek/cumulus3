@@ -1,17 +1,29 @@
 # Database Rebuild Tool
 
-Utilita pro rekonstrukci databáze z fyzických souborů (.dat, .meta, files_metadata.bin).
+Utilita pro rekonstrukci databáze z fyzických souborů (`.dat`, `.meta`, `files_metadata.bin`).
+Podporuje výstup do SQLite i PostgreSQL podle `DATABASE_TYPE`.
 
 ## Použití
 
 ```bash
-./build/rebuild-db --data-dir ./data/volumes --db-path ./data/database/cumulus3_rebuilt.db
+# SQLite rebuild
+DATABASE_TYPE=sqlite ./build/rebuild-db --data-dir ./data/volumes --db-path ./data/database/cumulus3_rebuilt.db
+
+# PostgreSQL rebuild
+DATABASE_TYPE=postgresql \
+PG_DATABASE_URL=postgresql://user:pass@localhost:5432/cumulus3 \
+./build/rebuild-db --data-dir ./data/volumes
 ```
 
 ## Parametry
 
 - `--data-dir` - Cesta k adresáři s volume soubory (default: `./data/volumes`)
-- `--db-path` - Cesta k výstupní databázi (default: `./data/database/cumulus3_rebuilt.db`)
+- `--db-path` - Cesta k výstupní SQLite databázi (volitelné, používá se jen při `DATABASE_TYPE=sqlite`)
+
+### Databázové proměnné
+
+- `DATABASE_TYPE` - `sqlite` nebo `postgresql` (default: `sqlite`)
+- `PG_DATABASE_URL` - PostgreSQL DSN (povinné při `DATABASE_TYPE=postgresql`)
 
 ## Co dělá
 
@@ -39,9 +51,9 @@ rm data/database/cumulus3.db
 ./build/rebuild-db
 ```
 
-### Migrace na jinou databázi
+### Migrace na jinou SQLite databázi
 ```bash
-# Rebuild do nové DB
+# Rebuild do nové SQLite DB
 ./build/rebuild-db --db-path ./data/database/new.db
 
 # Přepnout aplikaci na novou DB
@@ -80,7 +92,8 @@ mv data/database/cumulus3_rebuilt.db data/database/cumulus3.db
 🔨 Cumulus3 Database Rebuild Tool
 ===================================
 Data directory: ./data/volumes
-Output database: ./data/database/cumulus3_rebuilt.db
+Database type: sqlite
+Output: ./data/database/cumulus3_rebuilt.db
 
 📊 Initializing database schema...
 
@@ -112,7 +125,8 @@ Output database: ./data/database/cumulus3_rebuilt.db
 
 - **Rychlé:** Používá .meta soubory pro rychlý index
 - **Spolehlivé:** Fallback na přímé skenování .dat souborů
-- **Bezpečné:** Vytváří novou databázi, nemodifikuje existující
+- **Bezpečné (SQLite):** Vytváří novou databázi, nemodifikuje existující
+- **Pozor (PostgreSQL):** Cílové tabulky jsou znovu vytvořeny podle aktuálního schématu
 - **Automatické:** Detekuje MIME types z dat
 - **Kompletní:** Obnovuje všechny tabulky včetně volume sizes
 

@@ -47,7 +47,7 @@ Cumulus3 solves these problems by:
 1. **Consolidating small files** into large append-only volume files (Haystack architecture)
 2. **Content-based deduplication** using BLAKE2b-256 hashing to eliminate duplicate storage
 3. **Adaptive compression** with Zstandard for optimal space utilization
-4. **Efficient metadata management** using SQLite with WAL mode for high concurrency
+4. **Efficient metadata management** using SQLite or PostgreSQL (selected by `DATABASE_TYPE`)
 5. **Built-in image processing** with on-the-fly thumbnail generation and resizing
 
 ## Key Features
@@ -81,8 +81,9 @@ Cumulus3 solves these problems by:
 
 ### 💾 Robust Metadata Management
 
-- **SQLite database**: Embedded, zero-configuration, ACID-compliant database
-- **WAL mode**: Write-Ahead Logging for optimal concurrency and crash recovery
+- **Dual database support**: SQLite (embedded) or PostgreSQL (external)
+- **Configurable backend**: `DATABASE_TYPE=sqlite|postgresql`
+- **SQLite WAL mode**: Enabled when SQLite is used (optimal concurrency and crash recovery)
 - **Thread-safe operations**: Handles concurrent uploads efficiently
 - **Optimized queries**: Indexes on hash, UUID, and legacy ID fields
 - **Metadata logging**: Append-only log for disaster recovery scenarios
@@ -144,7 +145,7 @@ Cumulus3 separates **Logical Files** (user perspective) from **Physical Blobs** 
 - **File**: Logical representation with UUID, filename, MIME type, tags, timestamps
 - **Blob**: Physical data storage with hash, compression info, volume location
 - **Volume**: Large container file (e.g., 10GB) holding multiple blobs
-- **Metadata**: SQLite database tracking all relationships
+- **Metadata**: SQL database (SQLite or PostgreSQL) tracking all relationships
 
 ### Storage Flow
 
@@ -195,7 +196,7 @@ Cumulus3 separates **Logical Files** (user perspective) from **Physical Blobs** 
 
 - **Goroutines**: Each HTTP request handled in separate goroutine
 - **Per-volume locking**: RWMutex per volume for concurrent reads, serialized writes
-- **SQLite WAL mode**: Multiple readers, single writer without blocking readers
+- **SQLite WAL mode**: Multiple readers, single writer without blocking readers (SQLite only)
 - **Atomic operations**: All metadata updates are transactional
 
 ## Technology Stack
@@ -203,7 +204,7 @@ Cumulus3 separates **Logical Files** (user perspective) from **Physical Blobs** 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
 | **Language** | Go 1.25+ | High-performance, concurrent backend |
-| **Database** | SQLite 3 (WAL mode) | Embedded metadata storage |
+| **Database** | SQLite 3 / PostgreSQL | Metadata storage (embedded or external) |
 | **Hashing** | BLAKE2b-256 | Fast, secure content hashing |
 | **Compression** | Zstandard (Zstd) | Modern, high-ratio compression |
 | **Image Processing** | libvips (via bimg) | Fast, memory-efficient transformations |
@@ -611,7 +612,9 @@ SERVER_ADDRESS=0.0.0.0          # Bind address (0.0.0.0 for all interfaces)
 SERVER_PORT=8800                # HTTP port
 
 # Storage Configuration
-DB_SQLITE_PATH=/app/data/database/cumulus3.db  # SQLite database path
+DATABASE_TYPE=sqlite            # sqlite | postgresql
+DB_SQLITE_PATH=/app/data/database/cumulus3.db  # SQLite database path (when DATABASE_TYPE=sqlite)
+PG_DATABASE_URL=postgresql://user:pass@localhost:5432/cumulus3  # PostgreSQL DSN (when DATABASE_TYPE=postgresql)
 DATA_DIR=/app/data/volumes      # Volume files directory
 DATA_FILE_SIZE=10GB             # Maximum size per volume file
 MAX_UPLOAD_FILE_SIZE=500MB      # Maximum upload size
@@ -659,6 +662,15 @@ See [LOGGING.md](LOGGING.md) for detailed logging documentation.
 ## Maintenance Tools
 
 Cumulus3 includes several maintenance tools for database optimization and disaster recovery.
+
+### DB Boundary Guard (CI)
+
+To keep database access centralized, Cumulus3 includes an automated boundary guard:
+
+- `scripts/check-db-boundary.sh`
+- `.github/workflows/db-boundary-guard.yml`
+
+Rule: direct `meta.db.` access is allowed only in `src/internal/storage/database.go`.
 
 ### Admin Web Interface (NEW!)
 
@@ -727,7 +739,7 @@ Volume ID | Size (MB) | Active (MB) | Blobs | Fragmentation
 ./build/compact-tool volumes compact-all --threshold 20
 ```
 
-**Database VACUUM (requires downtime):**
+**Database VACUUM (requires downtime, SQLite only):**
 
 ```bash
 # Stop the server first
@@ -764,12 +776,17 @@ This scans all `volume_*.dat` files and `files_metadata.bin` log to reconstruct 
 
 ### Rebuild Database Tool
 
-Rebuild SQLite database from volume files and metadata logs:
+Rebuild metadata database from volume files and metadata logs (SQLite or PostgreSQL):
 
 ```bash
-./build/rebuild-db \
-  -data ./data \
-  -db ./data/database/cumulus3_new.db
+DATABASE_TYPE=sqlite ./build/rebuild-db \
+  --data-dir ./data/volumes \
+  --db-path ./data/database/cumulus3_new.db
+
+# or rebuild directly into PostgreSQL (WARNING: rebuild target tables are recreated)
+DATABASE_TYPE=postgresql \
+PG_DATABASE_URL=postgresql://user:pass@localhost:5432/cumulus3 \
+./build/rebuild-db --data-dir ./data/volumes
 ```
 
 See [REBUILD-DB.md](REBUILD-DB.md) for detailed recovery procedures.

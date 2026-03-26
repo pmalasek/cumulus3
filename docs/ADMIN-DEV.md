@@ -104,10 +104,11 @@ func AdminAuthMiddleware(username, password string, next http.Handler) http.Hand
 **Store (storage/store.go):**
 - `CompactVolume(volumeID, meta)` - Kompaktace volume
 
-**MetadataSQL (storage/metadata.go):**
+**MetadataSQL (storage/database.go):**
 - `GetStorageStats()` - Storage statistiky
 - `GetVolumesToCompact(threshold)` - Seznam volumes
-- `GetDB()` - Přímý přístup k databázi pro custom queries
+- Další DB operace jsou centralizovány jako metody `MetadataSQL`
+- Přímý přístup k DB mimo `storage/database.go` je zakázán architekturním guardem
 
 ### Bezpečnostní úvahy
 
@@ -185,15 +186,13 @@ mux.HandleFunc("/system/new-operation", s.HandleSystemNewOperation)
 
 #### Přidání nových statistik:
 
-1. Rozšířit SQL query v `HandleSystemStats`:
+1. Rozšířit `MetadataSQL` o novou metodu v `storage/database.go`:
 ```go
 var newStat int64
-err = s.FileService.MetaStore.GetDB().QueryRow(`
-    SELECT COUNT(*) FROM table WHERE condition
-`).Scan(&newStat)
+err = s.FileService.MetaStore.GetNewStat().Scan(&newStat)
 ```
 
-2. Přidat do response:
+2. Zavolat tuto metodu v `HandleSystemStats` a přidat do response:
 ```go
 stats := map[string]interface{}{
     "newSection": map[string]interface{}{

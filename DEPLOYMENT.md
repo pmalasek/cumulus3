@@ -275,7 +275,9 @@ Otevřete v prohlížeči:
 | `SERVER_ADDRESS` | `0.0.0.0` | IP adresa serveru |
 | `SERVER_PORT` | `8800` | Port serveru |
 | `SWAGGER_HOST` | - | Host pro Swagger UI (prázdné = použije se aktuální URL) |
-| `DB_SQLITE_PATH` | `/app/data/database/cumulus3.db` | Cesta k databázi |
+| `DATABASE_TYPE` | `sqlite` | Typ databáze (`sqlite` nebo `postgresql`) |
+| `DB_SQLITE_PATH` | `/app/data/database/cumulus3.db` | Cesta k SQLite DB (při `DATABASE_TYPE=sqlite`) |
+| `PG_DATABASE_URL` | - | PostgreSQL DSN (při `DATABASE_TYPE=postgresql`) |
 | `DATA_DIR` | `/app/data/volumes` | Adresář pro volume soubory |
 | `DATA_FILE_SIZE` | `100MB` | Max. velikost jednoho volume |
 | `MAX_UPLOAD_FILE_SIZE` | `50MB` | Max. velikost uploadu |
@@ -291,13 +293,15 @@ Otevřete v prohlížeči:
 ```bash
 /app/data/
 ├── database/
-│   └── cumulus3.db          # SQLite databáze
+│   └── cumulus3.db          # SQLite databáze (jen při DATABASE_TYPE=sqlite)
 ├── volumes/
 │   ├── volume_001.dat       # Data soubory
 │   └── volume_002.dat
 └── metadata/
     └── operations.log        # Recovery log
 ```
+
+> Při `DATABASE_TYPE=postgresql` se metadata ukládají do PostgreSQL a lokální soubor `database/cumulus3.db` se nepoužívá.
 
 ## Monitoring
 
@@ -770,7 +774,7 @@ A: Ne, Nginx je zakomentovaný. Pro produkci je lepší použít centrální Ngi
 A: Ano, upravte `SERVER_PORT` v `.env` a port mapping v `docker-compose.yml`.
 
 **Q: Je možné použít externí databázi?**  
-A: Aktuálně Cumulus3 používá pouze SQLite. MySQL/PostgreSQL podpora není implementována.
+A: Ano. Podporované jsou `sqlite` a `postgresql` přes `DATABASE_TYPE`.
 
 **Q: Jak migruji data z Cumulus verze 2?**  
 A: Použijte nástroj `/app/migrate_cumulus` v kontejneru.

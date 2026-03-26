@@ -272,11 +272,15 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=SecurePassword123
 
 # Standard configuration (already existing)
+DATABASE_TYPE=sqlite
 DB_SQLITE_PATH=./data/database/cumulus3.db
+PG_DATABASE_URL=postgresql://user:pass@localhost:5432/cumulus3
 DATA_DIR=./data/volumes
 SERVER_PORT=8800
 SERVER_ADDRESS=0.0.0.0
 ```
+
+> `PG_DATABASE_URL` is required only when `DATABASE_TYPE=postgresql`.
 
 ## Usage
 
