@@ -240,8 +240,7 @@ func (s *Store) WriteBlobWithMetadata(blobID int64, r io.Reader, size int64, com
 		// Double-check if volume still has space after acquiring lock
 		// Another goroutine might have filled it while we were waiting
 		if meta != nil {
-			var currentSize int64
-			err := meta.db.QueryRow("SELECT COALESCE(size_total, 0) FROM volumes WHERE id = ?", targetVol).Scan(&currentSize)
+			currentSize, err := meta.GetVolumeSize(targetVol)
 			if err != nil && err != sql.ErrNoRows {
 				// Database error (not just missing row)
 				volLock.Unlock()
@@ -318,11 +317,7 @@ func (s *Store) WriteBlobWithMetadata(blobID int64, r io.Reader, size int64, com
 		// This prevents race condition where multiple goroutines read old size_total
 		totalBytesWritten := int64(HeaderSize) + size + int64(FooterSize)
 		if meta != nil {
-			_, err := meta.db.Exec(`
-				INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, ?, 0)
-				ON CONFLICT(id) DO UPDATE SET size_total = size_total + ?
-			`, volumeID, totalBytesWritten, totalBytesWritten)
-			if err != nil {
+			if err := meta.AddWrittenBytesToVolume(volumeID, totalBytesWritten); err != nil {
 				return 0, 0, 0, fmt.Errorf("failed to update volume size: %w", err)
 			}
 		}
@@ -493,16 +488,10 @@ func (s *Store) writeMetaRecord(metaPath string, blobID int64, offset int64, siz
 // Reads the actual blob data from the volume file to compute correct CRC32 values.
 func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 	// Get all blobs for this volume from database (with correct offsets after compaction)
-	rows, err := meta.db.Query(`
-		SELECT b.id, b.offset, b.size_compressed, b.compression_alg 
-		FROM blobs b 
-		WHERE b.volume_id = ? 
-		ORDER BY b.offset ASC
-	`, volumeID)
+	blobs, err := meta.GetBlobsForMetaRegeneration(volumeID)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
 	// Determine filename
 	filename := fmt.Sprintf("volume_%08d.dat", volumeID)
@@ -537,12 +526,11 @@ func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 	dataBuf := make([]byte, 0, 64*1024) // reusable; grown as needed
 
 	// Write all blob records with updated offsets
-	for rows.Next() {
-		var blobID, offset, sizeCompressed int64
-		var compressionAlg string
-		if err := rows.Scan(&blobID, &offset, &sizeCompressed, &compressionAlg); err != nil {
-			return err
-		}
+	for _, blob := range blobs {
+		blobID := blob.ID
+		offset := blob.Offset
+		sizeCompressed := blob.SizeCompressed
+		compressionAlg := blob.CompressionAlg
 
 		// Convert compression alg string to byte code
 		var compAlgCode uint8 = 0
@@ -577,5 +565,5 @@ func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 		}
 	}
 
-	return rows.Err()
+	return nil
 }

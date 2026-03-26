@@ -56,11 +56,10 @@ func (s *Store) CompactVolume(volumeID int64, meta *MetadataSQL) error {
 	defer originalFile.Close()
 
 	// 2. Iterate blobs
-	rows, err := meta.db.Query("SELECT id, hash, offset, size_compressed FROM blobs WHERE volume_id = ? ORDER BY offset ASC", volumeID)
+	blobs, err := meta.GetBlobsForCompaction(volumeID)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
 	type BlobUpdate struct {
 		ID        int64
@@ -73,12 +72,10 @@ func (s *Store) CompactVolume(volumeID int64, meta *MetadataSQL) error {
 	maxBlobSize := int64(1 << 20) // 1 MB initial size
 	buffer := make([]byte, maxBlobSize)
 
-	for rows.Next() {
-		var id, offset, sizeCompressed int64
-		var hash string
-		if err := rows.Scan(&id, &hash, &offset, &sizeCompressed); err != nil {
-			return err
-		}
+	for _, blob := range blobs {
+		id := blob.ID
+		offset := blob.Offset
+		sizeCompressed := blob.SizeCompressed
 
 		// Read blob data
 		// Calculate total size including header/footer
@@ -108,27 +105,21 @@ func (s *Store) CompactVolume(volumeID int64, meta *MetadataSQL) error {
 	}
 
 	// 3. Transaction update
-	tx, err := meta.db.Begin()
+	compactionTx, err := meta.BeginVolumeCompactionTx()
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
-
-	updateStmt, err := tx.Prepare("UPDATE blobs SET offset = ? WHERE id = ?")
-	if err != nil {
-		return err
-	}
-	defer updateStmt.Close()
+	defer compactionTx.Rollback()
 
 	for _, u := range updates {
-		if _, err := updateStmt.Exec(u.NewOffset, u.ID); err != nil {
+		if err := compactionTx.UpdateBlobOffset(u.ID, u.NewOffset); err != nil {
 			return err
 		}
 	}
 
 	// Update volumes table
 	// set size_deleted = 0, size_total = new_size
-	if _, err := tx.Exec("UPDATE volumes SET size_total = ?, size_deleted = 0 WHERE id = ?", currentOffset, volumeID); err != nil {
+	if err := compactionTx.UpdateVolumeSize(volumeID, currentOffset); err != nil {
 		return err
 	}
 
@@ -143,7 +134,7 @@ func (s *Store) CompactVolume(volumeID int64, meta *MetadataSQL) error {
 	}
 
 	// 6. Commit transaction after successful file swap
-	if err := tx.Commit(); err != nil {
+	if err := compactionTx.Commit(); err != nil {
 		// Critical: file is renamed but DB update failed
 		// Try to restore old file (best effort)
 		os.Rename(fullPath, compactPath)

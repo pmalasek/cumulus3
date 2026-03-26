@@ -11,12 +11,14 @@ Cumulus3 Storage now includes a complete admin interface and System API for stor
 Web page for complete Cumulus3 Storage management with Basic Auth authentication.
 
 **Login Credentials:**
+
 - Default: `admin` / `admin`
 - Configuration via environment variables: `ADMIN_USERNAME` and `ADMIN_PASSWORD`
 
 **Features:**
 
-#### Real-time Statistics:
+#### Real-time Statistics
+
 - **BLOB Statistics:**
   - BLOB count
   - Compressed size
@@ -34,7 +36,8 @@ Web page for complete Cumulus3 Storage management with Basic Auth authentication
   - Deleted size (free space)
   - Fragmentation
 
-#### Volume Management:
+#### Volume Management
+
 - Overview of all volumes with:
   - Volume ID
   - Sizes (total, used, deleted)
@@ -43,7 +46,8 @@ Web page for complete Cumulus3 Storage management with Basic Auth authentication
 - Compact individual volumes
 - Compact all volumes at once
 
-#### Integrity Check:
+#### Integrity Check
+
 - **Quick Check** - Fast metadata check (~1s):
   - Orphaned blobs (blobs without files)
   - Missing blobs (files referencing non-existent blobs)
@@ -53,7 +57,8 @@ Web page for complete Cumulus3 Storage management with Basic Auth authentication
   - Blob readability at their offsets
   - Physical data validity
 
-#### Job Tracking:
+#### Job Tracking
+
 - Overview of all running and completed jobs
 - Status: pending, running, completed, failed
 - Real-time operation progress
@@ -67,9 +72,11 @@ RESTful API for programmatic access to storage maintenance.
 ## Endpoints
 
 ### `GET /system/stats`
+
 Returns complete storage statistics.
 
 **Response:**
+
 ```json
 {
   "blobs": {
@@ -93,9 +100,11 @@ Returns complete storage statistics.
 ```
 
 ### `GET /system/volumes`
+
 Returns list of all volumes with their statistics.
 
 **Response:**
+
 ```json
 [
   {
@@ -109,9 +118,11 @@ Returns list of all volumes with their statistics.
 ```
 
 ### `POST /system/compact`
+
 Starts volume(s) compaction.
 
 **Request - Compact one volume:**
+
 ```json
 {
   "volumeId": 1
@@ -119,6 +130,7 @@ Starts volume(s) compaction.
 ```
 
 **Request - Compact all volumes:**
+
 ```json
 {
   "all": true,
@@ -127,6 +139,7 @@ Starts volume(s) compaction.
 ```
 
 **Response:**
+
 ```json
 {
   "jobId": "compact-1734169234",
@@ -135,12 +148,15 @@ Starts volume(s) compaction.
 ```
 
 ### `GET /system/jobs`
+
 Returns list of all jobs or detail of specific job.
 
 **Query Parameters:**
+
 - `id` (optional): Specific job ID
 
 **Response - Job List:**
+
 ```json
 [
   {
@@ -156,6 +172,7 @@ Returns list of all jobs or detail of specific job.
 ```
 
 **Response - Job Detail:**
+
 ```json
 {
   "id": "compact-1734169234",
@@ -169,12 +186,15 @@ Returns list of all jobs or detail of specific job.
 ```
 
 ### `GET /system/integrity`
+
 Starts storage integrity check.
 
 **Query Parameters:**
+
 - `deep=true` - Performs deep check including physical files (default: false)
 
 **Response:**
+
 ```json
 {
   "jobId": "integrity-check-1734169234",
@@ -185,6 +205,7 @@ Starts storage integrity check.
 #### Quick Check
 
 Default mode checks only database metadata:
+
 - Orphaned blobs (blobs without references from files)
 - Missing blobs (files referencing non-existent blobs)
 
@@ -195,6 +216,7 @@ curl http://localhost:8800/system/integrity
 ```
 
 **Result:**
+
 ```json
 {
   "id": "integrity-check-1734169234",
@@ -209,6 +231,7 @@ curl http://localhost:8800/system/integrity
 #### Deep Check
 
 Extended mode also checks physical integrity:
+
 - Everything from quick check
 - Existence of volume files on disk
 - Blob readability at physical offsets
@@ -221,6 +244,7 @@ curl "http://localhost:8800/system/integrity?deep=true"
 ```
 
 **Result:**
+
 ```json
 {
   "id": "integrity-check-deep-1734169234",
@@ -233,6 +257,7 @@ curl "http://localhost:8800/system/integrity?deep=true"
 ```
 
 **Possible States:**
+
 - `ok` - Everything is fine
 - `warning` - Minor issues (e.g., orphaned blobs)
 - `error` - Serious problems (missing blobs, volume files, or unreadable data)
@@ -267,36 +292,42 @@ SERVER_ADDRESS=0.0.0.0
 
 ### 2. API Examples
 
-#### Get Statistics:
+#### Get Statistics
+
 ```bash
 curl http://localhost:8800/system/stats
 ```
 
-#### Compact Volume:
+#### Compact Volume
+
 ```bash
 curl -X POST http://localhost:8800/system/compact \
   -H "Content-Type: application/json" \
   -d '{"volumeId": 1}'
 ```
 
-#### Compact All Volumes:
+#### Compact All Volumes
+
 ```bash
 curl -X POST http://localhost:8800/system/compact \
   -H "Content-Type: application/json" \
   -d '{"all": true, "threshold": 20}'
 ```
 
-#### Quick Integrity Check:
+#### Quick Integrity Check
+
 ```bash
 curl http://localhost:8800/system/integrity
 ```
 
-#### Deep Integrity Check:
+#### Deep Integrity Check
+
 ```bash
 curl "http://localhost:8800/system/integrity?deep=true"
 ```
 
-#### Monitor Jobs:
+#### Monitor Jobs
+
 ```bash
 # All jobs
 curl http://localhost:8800/system/jobs
@@ -343,6 +374,7 @@ All heavy operations (compaction, integrity check) run asynchronously:
 ## Security
 
 ⚠️ **Important:**
+
 - Change default password in production environment!
 - Use HTTPS in production
 - Consider adding rate limiting

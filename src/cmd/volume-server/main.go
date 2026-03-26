@@ -61,7 +61,9 @@ func printStartupConfiguration() {
 
 	// Define configuration parameters to display
 	configParams := []string{
+		"DATABASE_TYPE",
 		"DB_SQLITE_PATH",
+		"PG_DATABASE_URL",
 		"DATA_DIR",
 		"DATA_FILE_SIZE",
 		"MAX_UPLOAD_FILE_SIZE",
@@ -100,9 +102,37 @@ func main() {
 
 	utils.Info("STARTUP", "Cumulus3 starting up, log level: %s", utils.GetLogLevel())
 
-	dbPath := os.Getenv("DB_SQLITE_PATH")
-	if dbPath == "" {
-		dbPath = "./data/database/cumulus3.db"
+	// Database configuration
+	dbType := os.Getenv("DATABASE_TYPE")
+	if dbType == "" {
+		dbType = "sqlite" // Default to SQLite for backward compatibility
+	}
+
+	var dsn string
+	switch dbType {
+	case "sqlite":
+		dbPath := os.Getenv("DB_SQLITE_PATH")
+		if dbPath == "" {
+			dbPath = "./data/database/cumulus3.db"
+		}
+		// Create database directory
+		dbDir := filepath.Dir(dbPath)
+		if err := os.MkdirAll(dbDir, 0755); err != nil {
+			panic("Nelze vytvořit adresář pro DB: " + err.Error())
+		}
+		dsn = fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_sync=NORMAL", dbPath)
+		utils.Info("DATABASE", "Using SQLite database: %s", dbPath)
+
+	case "postgresql":
+		pgURL := os.Getenv("PG_DATABASE_URL")
+		if pgURL == "" {
+			panic("PG_DATABASE_URL is required when DATABASE_TYPE=postgresql")
+		}
+		dsn = pgURL
+		utils.Info("DATABASE", "Using PostgreSQL database")
+
+	default:
+		panic(fmt.Sprintf("Unsupported DATABASE_TYPE: %s (use 'sqlite' or 'postgresql')", dbType))
 	}
 
 	dataFileSizeStr := os.Getenv("DATA_FILE_SIZE")
@@ -130,25 +160,18 @@ func main() {
 		dataDir = "./data"
 	}
 
-	// 1. Inicializace složky pro data
-	dbDir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
-		panic("Nelze vytvořit adresář pro DB: " + err.Error())
-	}
-
-	// 2. Start Metadata DB (SQLite)
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_sync=NORMAL", dbPath)
-	metaStore, err := storage.NewMetadataSQL(dsn)
+	// Start Metadata DB
+	metaStore, err := storage.NewMetadataSQL(dbType, dsn)
 	if err != nil {
 		panic("Nelze otevřít DB: " + err.Error())
 	}
 	// Důležité: Zavřít DB při ukončení programu
 	defer metaStore.Close()
 
-	// 3. Inicializace File Storage (zatím to naše jednoduché)
+	// Inicializace File Storage
 	fileStore := storage.NewStore(dataDir, maxDataFileSize)
 
-	// 3b. Inicializace Metadata Loggeru (pro disaster recovery)
+	// Inicializace Metadata Loggeru (pro disaster recovery)
 	metaLogger := storage.NewMetadataLogger(dataDir)
 
 	// Start metrics updater

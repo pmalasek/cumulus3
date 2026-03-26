@@ -46,16 +46,18 @@ func printUsage() {
 	fmt.Println("  compact-tool volumes list                    - List all volumes and their fragmentation")
 	fmt.Println("  compact-tool volumes compact <id>            - Compact specific volume by ID")
 	fmt.Println("  compact-tool volumes compact-all [--threshold 20] - Compact all volumes with fragmentation >= threshold%")
-	fmt.Println("  compact-tool db vacuum                       - Perform SQLite VACUUM (requires downtime)")
+	fmt.Println("  compact-tool db vacuum                       - Perform database VACUUM (SQLite only)")
 	fmt.Println("  compact-tool help                            - Show this help")
 	fmt.Println()
 	fmt.Println("Environment variables:")
+	fmt.Println("  DATABASE_TYPE    - Database type: sqlite or postgresql (default: sqlite)")
 	fmt.Println("  DB_SQLITE_PATH   - Path to SQLite database (default: ./data/database/cumulus3.db)")
+	fmt.Println("  PG_DATABASE_URL  - PostgreSQL connection URL (required if DATABASE_TYPE=postgresql)")
 	fmt.Println("  DATA_DIR  - Path to volume directory (default: ./data/volumes)")
 	fmt.Println()
 	fmt.Println("Notes:")
 	fmt.Println("  - Volume compaction can run while server is running (per-volume locking)")
-	fmt.Println("  - Database VACUUM requires stopping the server (full database lock)")
+	fmt.Println("  - Database VACUUM is only available for SQLite (requires downtime)")
 	fmt.Println("  - Compaction requires free disk space equal to volume size")
 }
 
@@ -110,10 +112,31 @@ func handleDBCommand() {
 	}
 }
 
-func getConfig() (dbPath, dataDir string) {
-	dbPath = os.Getenv("DB_SQLITE_PATH")
-	if dbPath == "" {
-		dbPath = "./data/database/cumulus3.db"
+func getConfig() (dbType, dsn, dataDir string) {
+	dbType = os.Getenv("DATABASE_TYPE")
+	if dbType == "" {
+		dbType = "sqlite" // Default to SQLite for backward compatibility
+	}
+
+	switch dbType {
+	case "sqlite":
+		dbPath := os.Getenv("DB_SQLITE_PATH")
+		if dbPath == "" {
+			dbPath = "./data/database/cumulus3.db"
+		}
+		dsn = fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_sync=NORMAL", dbPath)
+
+	case "postgresql":
+		pgURL := os.Getenv("PG_DATABASE_URL")
+		if pgURL == "" {
+			fmt.Println("Error: PG_DATABASE_URL is required when DATABASE_TYPE=postgresql")
+			os.Exit(1)
+		}
+		dsn = pgURL
+
+	default:
+		fmt.Printf("Error: Unsupported DATABASE_TYPE: %s (use 'sqlite' or 'postgresql')\n", dbType)
+		os.Exit(1)
 	}
 
 	dataDir = os.Getenv("DATA_DIR")
@@ -121,13 +144,13 @@ func getConfig() (dbPath, dataDir string) {
 		dataDir = "./data/volumes"
 	}
 
-	return dbPath, dataDir
+	return dbType, dsn, dataDir
 }
 
 func listVolumes() {
-	dbPath, dataDir := getConfig()
+	dbType, dsn, dataDir := getConfig()
 
-	metaStore, err := storage.NewMetadataSQL(dbPath)
+	metaStore, err := storage.NewMetadataSQL(dbType, dsn)
 	if err != nil {
 		fmt.Printf("Error opening metadata store: %v\n", err)
 		os.Exit(1)
@@ -182,13 +205,13 @@ func listVolumes() {
 }
 
 func compactVolume(volumeID int64) {
-	dbPath, dataDir := getConfig()
+	dbType, dsn, dataDir := getConfig()
 
 	fmt.Printf("Starting compaction of volume %d...\n", volumeID)
 
 	store := storage.NewStore(dataDir, 100*1024*1024) // Size doesn't matter for compaction
 
-	metaStore, err := storage.NewMetadataSQL(dbPath)
+	metaStore, err := storage.NewMetadataSQL(dbType, dsn)
 	if err != nil {
 		fmt.Printf("Error opening metadata store: %v\n", err)
 		os.Exit(1)
@@ -260,11 +283,11 @@ func compactVolume(volumeID int64) {
 }
 
 func compactAllVolumes(threshold float64) {
-	dbPath, dataDir := getConfig()
+	dbType, dsn, dataDir := getConfig()
 
 	store := storage.NewStore(dataDir, 100*1024*1024)
 
-	metaStore, err := storage.NewMetadataSQL(dbPath)
+	metaStore, err := storage.NewMetadataSQL(dbType, dsn)
 	if err != nil {
 		fmt.Printf("Error opening metadata store: %v\n", err)
 		os.Exit(1)
@@ -327,7 +350,13 @@ func compactAllVolumes(threshold float64) {
 }
 
 func vacuumDatabase() {
-	dbPath, _ := getConfig()
+	dbType, dsn, _ := getConfig()
+
+	if dbType != "sqlite" {
+		fmt.Println("Error: VACUUM command is only available for SQLite databases")
+		fmt.Println("PostgreSQL automatically manages database space with autovacuum")
+		os.Exit(1)
+	}
 
 	fmt.Println("⚠️  WARNING: Database VACUUM requires exclusive access!")
 	fmt.Println("⚠️  Please ensure the Cumulus3 server is stopped before proceeding.")
@@ -346,7 +375,7 @@ func vacuumDatabase() {
 	fmt.Println()
 	fmt.Println("Opening database...")
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		fmt.Printf("Error opening database: %v\n", err)
 		os.Exit(1)

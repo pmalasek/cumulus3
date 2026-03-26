@@ -204,7 +204,8 @@ server {
 }
 ```
 
-Aktivace:
+Aktivace
+
 ```bash
 sudo ln -s /etc/nginx/sites-available/cumulus3 /etc/nginx/sites-enabled/
 sudo nginx -t
@@ -233,6 +234,7 @@ scrape_configs:
 ```
 
 Reload Prometheus:
+
 ```bash
 sudo systemctl reload prometheus
 # Nebo přes API
@@ -240,12 +242,14 @@ curl -X POST http://prometheus-server:9090/-/reload
 ```
 
 Ověření metrik:
+
 ```bash
 # Test endpointu z Prometheus serveru
 curl http://10.0.0.X:8800/metrics
 ```
 
 **Dostupné metriky:**
+
 - `cumulus_storage_total_bytes` - celková velikost uložených dat
 - `cumulus_storage_deleted_bytes` - velikost smazaných dat
 - `cumulus_http_requests_total` - počet HTTP requestů
@@ -267,7 +271,7 @@ Otevřete v prohlížeči:
 ### Environment proměnné
 
 | Proměnná | Výchozí | Popis |
-|----------|---------|-------|
+ | ---------- | --------- | ------- |
 | `SERVER_ADDRESS` | `0.0.0.0` | IP adresa serveru |
 | `SERVER_PORT` | `8800` | Port serveru |
 | `SWAGGER_HOST` | - | Host pro Swagger UI (prázdné = použije se aktuální URL) |
@@ -300,7 +304,7 @@ Otevřete v prohlížeči:
 Přístup k jednotlivým službám:
 
 | Služba | URL | Poznámka |
-|--------|-----|----------|
+ | -------- | ----- | ---------- |
 | **Cumulus3 API** | `http://localhost:8800` | Přímý přístup k API |
 | **Přes centrální Nginx** | `https://cumulus.vase-domena.cz` | Doporučeno pro produkci |
 | **Swagger UI** | `http://localhost:8800/swagger/index.html` | API dokumentace |
@@ -392,11 +396,12 @@ docker compose logs cumulus3
    export GF_ADMIN_PASSWORD="silne-heslo"
    ```
 
-3. **Používejte HTTPS v production**:
+2. **Používejte HTTPS v production**:
+
    - Nakonfigurujte Nginx s SSL certifikáty
    - Umístěte certifikáty do `./ssl/` adresáře
 
-4. **Nastavte firewall**:
+3. **Nastavte firewall**:
 
    ```bash
    sudo ufw allow 80/tcp
@@ -404,7 +409,7 @@ docker compose logs cumulus3
    sudo ufw enable
    ```
 
-5. **Omezení zdrojů**:
+4. **Omezení zdrojů**:
    - V production compose jsou nastaveny CPU a memory limity
    - Upravte dle HW možností serveru
 
@@ -555,7 +560,8 @@ docker exec cumulus3-volume-server-1 /app/compact-tool volumes list
 ```
 
 Výstup:
-```
+
+```bash
 Volume Status:
 ─────────────────────────────────────────────────────────
 ID       Total Size      Deleted Size    Used Size       Fragmentation Status  
@@ -573,7 +579,8 @@ docker exec cumulus3-volume-server-1 /app/compact-tool volumes compact 3
 ```
 
 Výstup:
-```
+
+```bash
 Starting compaction of volume 3...
 Before: Total=69.9 MB, Deleted=43.3 MB, Fragmentation=61.9%
 After:  Total=26.6 MB, Deleted=0 B, Fragmentation=0.0%
@@ -582,6 +589,7 @@ After:  Total=26.6 MB, Deleted=0 B, Fragmentation=0.0%
 ```
 
 **Výhody:**
+
 - ⚡ **Běží za provozu** - ostatní volumes jsou přístupné
 - 🔒 **Per-volume locking** - bezpečné pro produkci
 - 📊 **Detailní reporty** - před/po statistiky
@@ -594,7 +602,8 @@ docker exec cumulus3-volume-server-1 /app/compact-tool volumes compact-all --thr
 ```
 
 Výstup:
-```
+
+```bash
 Found 3 volume(s) with fragmentation >= 30.0%
 
 [1/3] Compacting volume 2 (fragmentation: 35.9%)...
@@ -613,6 +622,7 @@ Total space saved: 95.5 MB
 ```
 
 **Doporučení:**
+
 - Spouštějte pravidelně (např. týdně) přes cron
 - Threshold 30% je vhodný kompromis
 - Kompaktace se provede během provozu bez downtime
@@ -631,7 +641,8 @@ docker compose start cumulus3
 ```
 
 Výstup:
-```
+
+```bash
 ⚠️  WARNING: Database VACUUM requires exclusive access!
 ⚠️  Please ensure the Cumulus3 server is stopped before proceeding.
 
@@ -647,6 +658,7 @@ Space saved: 46.6 MB (19.0%)
 ```
 
 **Důležité:**
+
 - 🛑 **Vyžaduje zastavení serveru** (downtime)
 - 💾 **Potřebuje 2x tolik místa** jako velikost DB
 - ⏰ **Může trvat několik minut** u velkých databází
@@ -731,12 +743,14 @@ docker exec cumulus3 /app/migrate_cumulus --help
 ### Doporučené nastavení pro produkci
 
 1. **Zvětšete volume size** pro menší fragmentaci:
+
    ```bash
    # V .env
    DATA_FILE_SIZE=50GB
    ```
 
 2. **Nastavte vhodné resource limity** v `docker-compose.yml`:
+
    ```yaml
    deploy:
      resources:

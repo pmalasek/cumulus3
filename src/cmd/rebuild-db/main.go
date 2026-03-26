@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pmalasek/cumulus3/src/internal/storage"
 	"github.com/pmalasek/cumulus3/src/internal/utils"
@@ -39,26 +40,77 @@ type FileInfo struct {
 }
 
 func main() {
+	// Load .env if exists
+	godotenv.Load()
+
 	dataDir := flag.String("data-dir", "./data/volumes", "Path to data directory with volume files")
-	dbPath := flag.String("db-path", "./data/database/cumulus3_rebuilt.db", "Path to output database file")
+	dbPath := flag.String("db-path", "", "Path to output database file (SQLite only)")
 	flag.Parse()
+
+	// Get database type from environment
+	dbType := os.Getenv("DATABASE_TYPE")
+	if dbType == "" {
+		dbType = "sqlite" // Default
+	}
+
+	var dsn string
+	var outputDesc string
+
+	switch dbType {
+	case "sqlite":
+		outputPath := *dbPath
+		if outputPath == "" {
+			outputPath = "./data/database/cumulus3_rebuilt.db"
+		}
+
+		// Remove existing database if it exists
+		if _, err := os.Stat(outputPath); err == nil {
+			fmt.Printf("⚠️  Removing existing database: %s\n", outputPath)
+			if err := os.Remove(outputPath); err != nil {
+				log.Fatalf("Failed to remove existing database: %v", err)
+			}
+		}
+
+		// Ensure directory exists
+		dbDir := filepath.Dir(outputPath)
+		if err := os.MkdirAll(dbDir, 0755); err != nil {
+			log.Fatalf("Failed to create database directory: %v", err)
+		}
+
+		dsn = fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_sync=NORMAL", outputPath)
+		outputDesc = outputPath
+
+	case "postgresql":
+		pgURL := os.Getenv("PG_DATABASE_URL")
+		if pgURL == "" {
+			log.Fatal("PG_DATABASE_URL is required when DATABASE_TYPE=postgresql")
+		}
+		dsn = pgURL
+		outputDesc = "PostgreSQL (from PG_DATABASE_URL)"
+
+		fmt.Println("⚠️  WARNING: Rebuilding into PostgreSQL will DROP all existing tables!")
+		fmt.Print("Continue? (yes/no): ")
+		var response string
+		fmt.Scanln(&response)
+		response = strings.ToLower(strings.TrimSpace(response))
+		if response != "yes" && response != "y" {
+			fmt.Println("Cancelled.")
+			return
+		}
+
+	default:
+		log.Fatalf("Unsupported DATABASE_TYPE: %s (use 'sqlite' or 'postgresql')", dbType)
+	}
 
 	fmt.Println("🔨 Cumulus3 Database Rebuild Tool")
 	fmt.Println("===================================")
 	fmt.Printf("Data directory: %s\n", *dataDir)
-	fmt.Printf("Output database: %s\n\n", *dbPath)
+	fmt.Printf("Database type: %s\n", dbType)
+	fmt.Printf("Output: %s\n\n", outputDesc)
 
-	// Remove existing database if it exists
-	if _, err := os.Stat(*dbPath); err == nil {
-		fmt.Printf("⚠️  Removing existing database: %s\n", *dbPath)
-		if err := os.Remove(*dbPath); err != nil {
-			log.Fatalf("Failed to remove existing database: %v", err)
-		}
-	}
-
-	// Initialize new database
+	// Initialize database
 	fmt.Println("📊 Initializing database schema...")
-	meta, err := storage.NewMetadataSQL(*dbPath)
+	meta, err := storage.NewMetadataSQL(dbType, dsn)
 	if err != nil {
 		log.Fatalf("Failed to create database: %v", err)
 	}

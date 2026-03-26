@@ -2,9 +2,7 @@
 
 **Cumulus3** is a high-performance, distributed object storage server written in **Go**, designed for storing and serving millions of small files efficiently.
 
-<div align="center">
-  <img src="img/admin_screen.png" alt="Cumulus3 Dashboard" width="800">
-</div>
+![Cumulus3 Dashboard](img/admin_screen.png)
 
 It is a modern implementation inspired by the **SeaweedFS** architecture (based on Facebook's Haystack paper). The primary goal is to provide extremely fast storage and retrieval for millions of small files, overcoming the inode limitations and metadata bottlenecks of traditional file systems.
 
@@ -35,9 +33,7 @@ It is a modern implementation inspired by the **SeaweedFS** architecture (based 
 
 ## Overview
 
-<div align="center">
-  <img src="img/grafana.png" alt="Grafana Dashboard" width="800">
-</div>
+![Grafana Dashboard](img/grafana.png)
 
 Cumulus3 is an object storage system specifically optimized for handling large volumes of small files (images, documents, media). Traditional file systems suffer from significant performance degradation when dealing with millions of small files due to:
 
