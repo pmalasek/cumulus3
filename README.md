@@ -980,7 +980,12 @@ See [MIGRATION.md](MIGRATION.md) for complete migration guide.
 ## RUN
 
 ```bash
+# Migration from old Cumulus
 clear;go run src/cmd/migrate_cumulus/main.go -db-host 172.24.0.12 -db-user <USERNAME> -db-pass <PASSWORD> -db-name cumulus -files-path /mnt/nfs/cumulus/data -api-host localhost -api-port 8800 -workers 30 -limit 100000000
+
+# Migrate from SQLite to PostgreSQL
+clear;go run src/cmd/sqlite2pg/main.go -sqlite-path ./data/database/cumulus3.db -pg-url postgresql://user:pass@172.24.0.11:5432/cumulus3 -truncate -progress 10
+
 ```
 
 ## Documentation
