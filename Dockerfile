@@ -24,12 +24,12 @@ RUN go install github.com/swaggo/swag/cmd/swag@latest && \
     swag init -g main.go -d src/cmd/volume-server,src/internal/api,src/internal/service --parseGoList=false --parseInternal
 
 # Build všech binárních souborů
-RUN mkdir -p build && \
-    CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/migrate_cumulus ./src/cmd/migrate_cumulus && \
-    CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/recovery-tool ./src/cmd/recovery-tool && \
-    CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/rebuild-db ./src/cmd/rebuild-db && \
-    CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/compact-tool ./src/cmd/compact-tool && \
-    CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/volume-server ./src/cmd/volume-server
+RUN mkdir -p build
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/migrate_cumulus ./src/cmd/migrate_cumulus
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/recovery-tool ./src/cmd/recovery-tool
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/rebuild-db ./src/cmd/rebuild-db
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/compact-tool ./src/cmd/compact-tool
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/volume-server ./src/cmd/volume-server
 
 # Runtime stage
 FROM alpine:latest
