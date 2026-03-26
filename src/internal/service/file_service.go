@@ -142,19 +142,29 @@ func (s *FileService) UploadFileWithDedup(file io.Reader, filename string, conte
 			return existingFile.ID, existingOldID, true, nil
 		}
 
-		// No existing file found – auto-assign the next old_cumulus_id.
-		maxID, err := s.MetaStore.GetMaxOldCumulusID()
+		// No existing file found – auto-assign the next old_cumulus_id atomically.
+		autoID, err := s.MetaStore.AllocateNextOldCumulusID()
 		if err != nil {
-			utils.Info("SERVICE", "ERROR getting max old_cumulus_id: %v", err)
+			utils.Info("SERVICE", "ERROR allocating old_cumulus_id: %v", err)
 			return "", 0, false, err
 		}
-		autoID := maxID + 1
 		oldCumulusID = &autoID
 		utils.Info("SERVICE", "Auto-assigned old_cumulus_id=%d for filename=%s", autoID, filename)
+	} else {
+		// Keep counter ahead of explicitly provided legacy IDs (migration/import path).
+		if err := s.MetaStore.EnsureOldCumulusIDAtLeast(*oldCumulusID); err != nil {
+			return "", 0, false, fmt.Errorf("failed to advance old_id counter: %w", err)
+		}
 	}
 
 	fileID, err := s.saveFile(filename, blobID, oldCumulusID, expiresAt, tags)
 	if err != nil {
+		if oldCumulusID != nil {
+			errText := strings.ToLower(err.Error())
+			if strings.Contains(errText, "old_cumulus_id") && (strings.Contains(errText, "unique") || strings.Contains(errText, "duplicate")) {
+				return "", 0, false, ErrOldCumulusIDConflict
+			}
+		}
 		utils.Info("SERVICE", "ERROR saving file metadata: filename=%s, blob_id=%d, error=%v", filename, blobID, err)
 		return "", 0, false, err
 	}
@@ -408,68 +418,63 @@ func (s *FileService) decideCompression(res *streamResult) (*os.File, int64, str
 
 // saveBlob stores the file content in the volume storage if it doesn't exist yet (deduplication)
 func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompressed int64, alg string, fileType utils.FileTypeResult) (int64, bool, error) {
-	// 1. Check if blob exists
-	blobID, exists, err := s.MetaStore.GetBlobIDByHash(hash)
-	if err != nil {
-		return 0, false, fmt.Errorf("database error: %w", err)
-	}
-	if exists {
-		// Check if blob is valid (not a zombie)
-		currentBlob, err := s.MetaStore.GetBlob(blobID)
+	// 1) Fast path: use already committed blob if it exists.
+	if committedID, exists, err := s.MetaStore.GetCommittedBlobIDByHash(hash); err == nil && exists {
+		currentBlob, err := s.MetaStore.GetBlob(committedID)
 		if err == nil {
-			if currentBlob.VolumeID == 0 {
-				// Zombie blob detected (created but not uploaded).
-				// Treat as if it doesn't exist, but reuse the ID.
-				exists = false
-			} else {
-				// Check if we can improve file type info
-				currentFileType, err := s.MetaStore.GetFileType(currentBlob.FileTypeID)
+			currentFileType, err := s.MetaStore.GetFileType(currentBlob.FileTypeID)
+			if err == nil && currentFileType.Category == "binary" && currentFileType.Subtype == "" && fileType.Type != "binary" {
+				newFileTypeID, err := s.MetaStore.GetOrCreateFileType(fileType.ContentType, fileType.Type, fileType.Subtype)
 				if err == nil {
-					// If current type is generic binary/octet-stream and new type is more specific
-					if currentFileType.Category == "binary" && currentFileType.Subtype == "" && fileType.Type != "binary" {
-						// Update file type
-						newFileTypeID, err := s.MetaStore.GetOrCreateFileType(fileType.ContentType, fileType.Type, fileType.Subtype)
-						if err == nil {
-							s.MetaStore.UpdateBlobFileType(blobID, newFileTypeID)
-						}
-					}
+					_ = s.MetaStore.UpdateBlobFileType(committedID, newFileTypeID)
 				}
-				return blobID, true, nil
 			}
 		}
+		return committedID, true, nil
 	}
 
-	// 2. Create new blob record to get ID
-	if blobID == 0 {
-		blobID, err = s.MetaStore.CreateBlob(hash)
-		if err != nil {
-			// Handle race condition: another process might have created the blob
-			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-				var exists bool
-				var lookupErr error
-				blobID, exists, lookupErr = s.MetaStore.GetBlobIDByHash(hash)
-				if lookupErr == nil && exists {
-					// Successfully recovered from race condition
-					// Check if it's a zombie (race condition with a zombie?)
-					// If it is a zombie, we have the ID now, so we can proceed to overwrite it.
-					// If it is valid, we should return it.
-
-					// For simplicity, if we recover an ID, we assume it's valid or we overwrite it.
-					// But if it's valid, we shouldn't overwrite it!
-
-					// Let's check validity again
-					recoveredBlob, err := s.MetaStore.GetBlob(blobID)
-					if err == nil && recoveredBlob.VolumeID > 0 {
-						return blobID, true, nil
-					}
-					// If it's a zombie, we proceed to upload using this blobID
-				}
-			}
-			if blobID == 0 {
+	// 2) Get or create pending blob row.
+	var blob storage.Blob
+	blob, err := s.MetaStore.GetBlobByHash(hash)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, false, fmt.Errorf("database error loading blob by hash: %w", err)
+		}
+		if _, err := s.MetaStore.CreateBlob(hash); err != nil {
+			if !strings.Contains(err.Error(), "UNIQUE constraint failed") && !strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
 				return 0, false, fmt.Errorf("database error creating blob: %w", err)
 			}
 		}
+		blob, err = s.MetaStore.GetBlobByHash(hash)
+		if err != nil {
+			return 0, false, fmt.Errorf("database error reloading blob by hash: %w", err)
+		}
 	}
+
+	if blob.State == "committed" && blob.VolumeID > 0 {
+		return blob.ID, true, nil
+	}
+
+	owner := uuid.New().String()
+	claimed, err := s.MetaStore.TryClaimBlobWrite(blob.ID, owner)
+	if err != nil {
+		return 0, false, fmt.Errorf("database error claiming blob write: %w", err)
+	}
+	if !claimed {
+		// Another uploader is writing this blob; wait briefly for commit.
+		for i := 0; i < 20; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if committedID, exists, err := s.MetaStore.GetCommittedBlobIDByHash(hash); err == nil && exists {
+				return committedID, true, nil
+			}
+		}
+		return 0, false, fmt.Errorf("blob write already in progress for hash %s", hash)
+	}
+	defer func() {
+		if err != nil {
+			_ = s.MetaStore.ReleaseBlobWriteClaim(blob.ID, owner)
+		}
+	}()
 
 	// 3. Write to storage
 	if _, err := file.Seek(0, 0); err != nil {
@@ -485,7 +490,7 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 	}
 
 	// Use WriteBlobWithMetadata to check DB values for free space
-	volID, offset, actualSize, err := s.Store.WriteBlobWithMetadata(blobID, file, sizeCompressed, compAlgCode, s.MetaStore)
+	volID, offset, actualSize, err := s.Store.WriteBlobWithMetadata(blob.ID, file, sizeCompressed, compAlgCode, s.MetaStore)
 	if err != nil {
 		return 0, false, fmt.Errorf("storage error: %w", err)
 	}
@@ -499,12 +504,19 @@ func (s *FileService) saveBlob(hash string, file *os.File, sizeRaw, sizeCompress
 	// Use actualSize from WriteBlobWithMetadata, which includes header+data+footer
 	// This is the actual disk space used and must match what's written to volumes table
 	sizeCompressedWithHeaders := actualSize - int64(storage.HeaderSize) - int64(storage.FooterSize)
-	err = s.MetaStore.UpdateBlobLocation(blobID, volID, offset, sizeRaw, sizeCompressedWithHeaders, alg, fileTypeID)
+	err = s.MetaStore.UpdateBlobLocation(blob.ID, volID, offset, sizeRaw, sizeCompressedWithHeaders, alg, fileTypeID)
 	if err != nil {
+		// Best-effort compensation: physical write already happened and size_total was increased
+		// inside WriteBlobWithMetadata. Roll back accounting to avoid long-term DB/file drift.
+		totalBytesWritten := int64(storage.HeaderSize) + sizeCompressedWithHeaders + int64(storage.FooterSize)
+		if revertErr := s.MetaStore.SubtractWrittenBytesFromVolume(volID, totalBytesWritten); revertErr != nil {
+			utils.Warn("SERVICE", "Failed to compensate volume size after finalize error: blob_id=%d, volume=%d, bytes=%d, err=%v",
+				blob.ID, volID, totalBytesWritten, revertErr)
+		}
 		return 0, false, fmt.Errorf("database error updating blob: %w", err)
 	}
 
-	return blobID, false, nil
+	return blob.ID, false, nil
 }
 
 // saveFile creates a new file record in the metadata database linked to the blob

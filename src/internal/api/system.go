@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"sync"
@@ -445,16 +444,8 @@ func (s *Server) performDeepIntegrityCheck(job *Job) {
 
 	unreadableBlobs := int64(0)
 	totalChecked := int64(0)
-	currentVolume := int64(-1)
-	var volumeFile *os.File
-	defer func() {
-		if volumeFile != nil {
-			volumeFile.Close()
-		}
-	}()
 
 	const batchSize = int64(1000)
-	testBuffer := make([]byte, 100)
 
 	for offset := int64(0); offset < totalBlobCount; offset += batchSize {
 		blobs, err := s.FileService.MetaStore.GetBlobsInRange(batchSize, offset)
@@ -471,26 +462,7 @@ func (s *Server) performDeepIntegrityCheck(job *Job) {
 					fmt.Sprintf("Checked %d/%d blobs (%.1f%%)", totalChecked, totalBlobCount, percentage), nil)
 			}
 
-			if currentVolume != b.VolumeID {
-				if volumeFile != nil {
-					volumeFile.Close()
-					volumeFile = nil
-				}
-				volumePath := fmt.Sprintf("%s/volume_%08d.dat", s.FileService.Store.BaseDir, b.VolumeID)
-				volumeFile, err = os.Open(volumePath)
-				if err != nil {
-					volumePath = fmt.Sprintf("%s/volume_%d.dat", s.FileService.Store.BaseDir, b.VolumeID)
-					volumeFile, err = os.Open(volumePath)
-					if err != nil {
-						unreadableBlobs++
-						continue
-					}
-				}
-				currentVolume = b.VolumeID
-			}
-
-			_, readErr := volumeFile.ReadAt(testBuffer, b.Offset)
-			if readErr != nil && readErr != io.EOF {
+			if _, readErr := s.FileService.Store.ReadBlob(b.VolumeID, b.Offset, b.SizeCompressed); readErr != nil {
 				unreadableBlobs++
 			}
 		}

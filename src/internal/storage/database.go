@@ -24,6 +24,8 @@ type File struct {
 type Blob struct {
 	ID             int64  `json:"id"`
 	Hash           string `json:"hash"`
+	State          string `json:"state"`
+	WriteOwner     string `json:"write_owner"`
 	VolumeID       int64  `json:"volume_id"`
 	Offset         int64  `json:"offset"`
 	SizeRaw        int64  `json:"size_raw"`
@@ -137,6 +139,9 @@ func (m *MetadataSQL) initSQLiteSchema() error {
 		`CREATE TABLE IF NOT EXISTS blobs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			hash TEXT UNIQUE,
+			state TEXT DEFAULT 'pending',
+			write_owner TEXT,
+			write_started_at DATETIME,
 			volume_id INTEGER,
 			blob_offset INTEGER,
 			size_raw INTEGER,
@@ -160,6 +165,10 @@ func (m *MetadataSQL) initSQLiteSchema() error {
 			size_total INTEGER DEFAULT 0,
 			size_deleted INTEGER DEFAULT 0
 		);`,
+		`CREATE TABLE IF NOT EXISTS old_id_counter (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			next_id INTEGER NOT NULL
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_expires_at ON files(expires_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_old_cumulus_id ON files(old_cumulus_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_blob_id ON files(blob_id);`,
@@ -177,6 +186,10 @@ func (m *MetadataSQL) initSQLiteSchema() error {
 
 	// Migration: Add tags column if not exists
 	_, _ = m.db.Exec("ALTER TABLE files ADD COLUMN tags TEXT")
+	_, _ = m.db.Exec("ALTER TABLE blobs ADD COLUMN state TEXT")
+	_, _ = m.db.Exec("ALTER TABLE blobs ADD COLUMN write_owner TEXT")
+	_, _ = m.db.Exec("ALTER TABLE blobs ADD COLUMN write_started_at DATETIME")
+	_, _ = m.db.Exec("UPDATE blobs SET state = CASE WHEN COALESCE(volume_id, 0) > 0 THEN 'committed' ELSE 'pending' END WHERE state IS NULL OR state = ''")
 
 	// Migration: ensure blob_offset column exists on legacy databases
 	if err := m.ensureSQLiteBlobOffsetColumn(); err != nil {
@@ -185,6 +198,13 @@ func (m *MetadataSQL) initSQLiteSchema() error {
 
 	// Index depending on blob_offset must be created after migration above
 	if _, err := m.db.Exec(`CREATE INDEX IF NOT EXISTS idx_blobs_volume_offset ON blobs(volume_id, blob_offset);`); err != nil {
+		return err
+	}
+
+	if err := m.ensureOldIDCounterInitialized(); err != nil {
+		return err
+	}
+	if err := m.ensureUniqueOldCumulusIDIndex(); err != nil {
 		return err
 	}
 
@@ -252,6 +272,9 @@ func (m *MetadataSQL) initPostgreSQLSchema() error {
 		`CREATE TABLE IF NOT EXISTS blobs (
 			id BIGSERIAL PRIMARY KEY,
 			hash VARCHAR(128) UNIQUE,
+			state VARCHAR(20) DEFAULT 'pending',
+			write_owner VARCHAR(64),
+			write_started_at TIMESTAMP,
 			volume_id BIGINT,
 			blob_offset BIGINT,
 			size_raw BIGINT,
@@ -274,6 +297,10 @@ func (m *MetadataSQL) initPostgreSQLSchema() error {
 			id BIGSERIAL PRIMARY KEY,
 			size_total BIGINT DEFAULT 0,
 			size_deleted BIGINT DEFAULT 0
+		);`,
+		`CREATE TABLE IF NOT EXISTS old_id_counter (
+			id SMALLINT PRIMARY KEY,
+			next_id BIGINT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_expires_at ON files(expires_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_old_cumulus_id ON files(old_cumulus_id);`,
@@ -303,6 +330,10 @@ func (m *MetadataSQL) initPostgreSQLSchema() error {
 			END IF;
 		END $$;
 	`)
+	_, _ = m.db.Exec(`ALTER TABLE blobs ADD COLUMN IF NOT EXISTS state VARCHAR(20)`)
+	_, _ = m.db.Exec(`ALTER TABLE blobs ADD COLUMN IF NOT EXISTS write_owner VARCHAR(64)`)
+	_, _ = m.db.Exec(`ALTER TABLE blobs ADD COLUMN IF NOT EXISTS write_started_at TIMESTAMP`)
+	_, _ = m.db.Exec(`UPDATE blobs SET state = CASE WHEN COALESCE(volume_id, 0) > 0 THEN 'committed' ELSE 'pending' END WHERE state IS NULL OR state = ''`)
 	// Migration: rename reserved column name offset -> blob_offset if needed
 	_, _ = m.db.Exec(`
 		DO $$ 
@@ -319,6 +350,66 @@ func (m *MetadataSQL) initPostgreSQLSchema() error {
 		END $$;
 	`)
 
+	if err := m.ensureOldIDCounterInitialized(); err != nil {
+		return err
+	}
+	if err := m.ensureUniqueOldCumulusIDIndex(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *MetadataSQL) ensureOldIDCounterInitialized() error {
+	maxID, err := m.GetMaxOldCumulusID()
+	if err != nil {
+		return fmt.Errorf("failed to read max old_cumulus_id: %w", err)
+	}
+	nextID := maxID + 1
+	if nextID < 1 {
+		nextID = 1
+	}
+
+	if m.dbType == "postgresql" {
+		if _, err := m.db.Exec(`
+			INSERT INTO old_id_counter (id, next_id) VALUES (1, $1)
+			ON CONFLICT (id) DO UPDATE SET next_id = GREATEST(old_id_counter.next_id, EXCLUDED.next_id)
+		`, nextID); err != nil {
+			return fmt.Errorf("failed to initialize old_id_counter: %w", err)
+		}
+		return nil
+	}
+
+	if _, err := m.db.Exec(`INSERT OR IGNORE INTO old_id_counter (id, next_id) VALUES (1, ?)`, nextID); err != nil {
+		return fmt.Errorf("failed to initialize old_id_counter row: %w", err)
+	}
+	if _, err := m.db.Exec(`UPDATE old_id_counter SET next_id = CASE WHEN next_id < ? THEN ? ELSE next_id END WHERE id = 1`, nextID, nextID); err != nil {
+		return fmt.Errorf("failed to sync old_id_counter: %w", err)
+	}
+	return nil
+}
+
+func (m *MetadataSQL) ensureUniqueOldCumulusIDIndex() error {
+	var dupCount int64
+	dupQuery := `
+		SELECT COUNT(*)
+		FROM (
+			SELECT old_cumulus_id
+			FROM files
+			WHERE old_cumulus_id IS NOT NULL
+			GROUP BY old_cumulus_id
+			HAVING COUNT(*) > 1
+		) d
+	`
+	if err := m.db.QueryRow(dupQuery).Scan(&dupCount); err != nil {
+		return fmt.Errorf("failed to check duplicate old_cumulus_id values: %w", err)
+	}
+	if dupCount > 0 {
+		return fmt.Errorf("migration blocked: found %d duplicate old_cumulus_id values; resolve duplicates before enabling uniqueness", dupCount)
+	}
+	if _, err := m.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_files_old_cumulus_id_unique ON files(old_cumulus_id)`); err != nil {
+		return fmt.Errorf("failed to enforce unique old_cumulus_id index: %w", err)
+	}
 	return nil
 }
 
@@ -473,6 +564,66 @@ func (m *MetadataSQL) GetBlobIDByHash(hash string) (int64, bool, error) {
 	return id, true, nil
 }
 
+func (m *MetadataSQL) GetCommittedBlobIDByHash(hash string) (int64, bool, error) {
+	var id int64
+	query := m.buildQuery(`SELECT id FROM blobs WHERE hash = ? AND state = 'committed'`)
+	err := m.db.QueryRow(query, hash).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
+}
+
+func (m *MetadataSQL) GetBlobByHash(hash string) (Blob, error) {
+	var b Blob
+	query := m.buildQuery(`
+		SELECT id, hash, COALESCE(state, 'pending'), COALESCE(write_owner, ''),
+		       COALESCE(volume_id, 0), COALESCE(blob_offset, 0), COALESCE(size_raw, 0),
+		       COALESCE(size_compressed, 0), COALESCE(compression_alg, ''), COALESCE(file_type_id, 0)
+		FROM blobs WHERE hash = ?
+	`)
+	err := m.db.QueryRow(query, hash).Scan(&b.ID, &b.Hash, &b.State, &b.WriteOwner, &b.VolumeID, &b.Offset, &b.SizeRaw, &b.SizeCompressed, &b.CompressionAlg, &b.FileTypeID)
+	if err != nil {
+		return Blob{}, err
+	}
+	return b, nil
+}
+
+func (m *MetadataSQL) TryClaimBlobWrite(blobID int64, owner string) (bool, error) {
+	now := time.Now().UTC()
+	staleBefore := now.Add(-5 * time.Minute)
+	query := m.buildQuery(`
+		UPDATE blobs
+		SET write_owner = ?, write_started_at = ?
+		WHERE id = ? AND state = 'pending' AND (
+			write_owner IS NULL OR write_owner = '' OR write_owner = ? OR
+			write_started_at IS NULL OR write_started_at < ?
+		)
+	`)
+	res, err := m.db.Exec(query, owner, now, blobID, owner, staleBefore)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
+func (m *MetadataSQL) ReleaseBlobWriteClaim(blobID int64, owner string) error {
+	query := m.buildQuery(`
+		UPDATE blobs
+		SET write_owner = NULL, write_started_at = NULL
+		WHERE id = ? AND state = 'pending' AND write_owner = ?
+	`)
+	_, err := m.db.Exec(query, blobID, owner)
+	return err
+}
+
 func (m *MetadataSQL) insertAndReturnID(insertQuery string, args ...any) (int64, error) {
 	if m.dbType == "postgresql" {
 		query := m.buildQuery(insertQuery + ` RETURNING id`)
@@ -492,12 +643,12 @@ func (m *MetadataSQL) insertAndReturnID(insertQuery string, args ...any) (int64,
 }
 
 func (m *MetadataSQL) CreateBlob(hash string) (int64, error) {
-	return m.insertAndReturnID(`INSERT INTO blobs (hash) VALUES (?)`, hash)
+	return m.insertAndReturnID(`INSERT INTO blobs (hash, state) VALUES (?, 'pending')`, hash)
 }
 
 // CreateBlobWithID creates a blob with a specific ID (for database rebuild)
 func (m *MetadataSQL) CreateBlobWithID(id int64, hash string) error {
-	query := m.buildQuery(`INSERT INTO blobs (id, hash) VALUES (?, ?)`)
+	query := m.buildQuery(`INSERT INTO blobs (id, hash, state) VALUES (?, ?, 'pending')`)
 	_, err := m.db.Exec(query, id, hash)
 	return err
 }
@@ -519,8 +670,8 @@ func (m *MetadataSQL) GetFile(id string) (File, error) {
 
 func (m *MetadataSQL) GetBlob(id int64) (Blob, error) {
 	var b Blob
-	query := m.buildQuery(`SELECT id, hash, COALESCE(volume_id, 0), COALESCE(blob_offset, 0), COALESCE(size_raw, 0), COALESCE(size_compressed, 0), COALESCE(compression_alg, ''), COALESCE(file_type_id, 0) FROM blobs WHERE id = ?`)
-	err := m.db.QueryRow(query, id).Scan(&b.ID, &b.Hash, &b.VolumeID, &b.Offset, &b.SizeRaw, &b.SizeCompressed, &b.CompressionAlg, &b.FileTypeID)
+	query := m.buildQuery(`SELECT id, hash, COALESCE(state, 'pending'), COALESCE(write_owner, ''), COALESCE(volume_id, 0), COALESCE(blob_offset, 0), COALESCE(size_raw, 0), COALESCE(size_compressed, 0), COALESCE(compression_alg, ''), COALESCE(file_type_id, 0) FROM blobs WHERE id = ?`)
+	err := m.db.QueryRow(query, id).Scan(&b.ID, &b.Hash, &b.State, &b.WriteOwner, &b.VolumeID, &b.Offset, &b.SizeRaw, &b.SizeCompressed, &b.CompressionAlg, &b.FileTypeID)
 	if err != nil {
 		return Blob{}, err
 	}
@@ -546,7 +697,7 @@ func (m *MetadataSQL) UpdateBlobLocation(id int64, volumeID, offset, sizeRaw, si
 
 	query := m.buildQuery(`
 	UPDATE blobs 
-	SET volume_id = ?, blob_offset = ?, size_raw = ?, size_compressed = ?, compression_alg = ?, file_type_id = ?
+	SET volume_id = ?, blob_offset = ?, size_raw = ?, size_compressed = ?, compression_alg = ?, file_type_id = ?, state = 'committed', write_owner = NULL, write_started_at = NULL
 	WHERE id = ?
 	`)
 	if _, err := tx.Exec(query, volumeID, offset, sizeRaw, sizeCompressed, compressionAlg, fileTypeID, id); err != nil {
@@ -557,6 +708,52 @@ func (m *MetadataSQL) UpdateBlobLocation(id int64, volumeID, offset, sizeRaw, si
 	// to ensure atomic check-and-update and prevent race conditions
 
 	return tx.Commit()
+}
+
+func (m *MetadataSQL) EnsureOldCumulusIDAtLeast(oldID int64) error {
+	if oldID <= 0 {
+		return nil
+	}
+	nextID := oldID + 1
+	if m.dbType == "postgresql" {
+		_, err := m.db.Exec(`UPDATE old_id_counter SET next_id = GREATEST(next_id, $1) WHERE id = 1`, nextID)
+		return err
+	}
+	query := m.buildQuery(`UPDATE old_id_counter SET next_id = CASE WHEN next_id < ? THEN ? ELSE next_id END WHERE id = 1`)
+	_, err := m.db.Exec(query, nextID, nextID)
+	return err
+}
+
+func (m *MetadataSQL) AllocateNextOldCumulusID() (int64, error) {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	var nextID int64
+	selectQuery := m.buildQuery(`SELECT next_id FROM old_id_counter WHERE id = ?`)
+	if m.dbType == "postgresql" {
+		selectQuery = `SELECT next_id FROM old_id_counter WHERE id = 1 FOR UPDATE`
+		if err := tx.QueryRow(selectQuery).Scan(&nextID); err != nil {
+			return 0, err
+		}
+	} else {
+		if err := tx.QueryRow(selectQuery, 1).Scan(&nextID); err != nil {
+			return 0, err
+		}
+	}
+
+	updateQuery := m.buildQuery(`UPDATE old_id_counter SET next_id = ? WHERE id = ?`)
+	if _, err := tx.Exec(updateQuery, nextID+1, 1); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return nextID, nil
 }
 
 func (m *MetadataSQL) UpdateBlobFileType(blobID int64, fileTypeID int64) error {
@@ -838,6 +1035,19 @@ func (m *MetadataSQL) AddWrittenBytesToVolume(volumeID int64, bytes int64) error
 	return err
 }
 
+func (m *MetadataSQL) SubtractWrittenBytesFromVolume(volumeID int64, bytes int64) error {
+	if bytes <= 0 {
+		return nil
+	}
+	query := m.buildQuery(`
+		UPDATE volumes
+		SET size_total = CASE WHEN size_total >= ? THEN size_total - ? ELSE 0 END
+		WHERE id = ?
+	`)
+	_, err := m.db.Exec(query, bytes, bytes, volumeID)
+	return err
+}
+
 func (m *MetadataSQL) GetBlobsForCompaction(volumeID int64) ([]BlobCompactionRecord, error) {
 	query := m.buildQuery("SELECT id, hash, blob_offset, size_compressed FROM blobs WHERE volume_id = ? ORDER BY blob_offset ASC")
 	rows, err := m.db.Query(query, volumeID)
@@ -1083,4 +1293,104 @@ func (m *MetadataSQL) CleanupExpiredTemporaryFiles() (int, int, int, error) {
 	}
 
 	return deletedCount, totalExpired, safeToDel, nil
+}
+
+// CleanupStalePendingBlobs removes old blobs stuck in pending state.
+// It deletes only blobs that are not referenced by any file row.
+// maxAge defines how old a pending blob must be (based on write_started_at) to be considered stale.
+// Blobs with NULL write_started_at are treated as stale immediately (legacy/crashed pending rows).
+func (m *MetadataSQL) CleanupStalePendingBlobs(maxAge time.Duration) (deletedCount int, totalStale int, err error) {
+	if maxAge < 0 {
+		maxAge = 0
+	}
+	staleBefore := time.Now().UTC().Add(-maxAge)
+
+	tx, err := m.db.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	countQuery := m.buildQuery(`
+		SELECT COUNT(*)
+		FROM blobs b
+		WHERE b.state = 'pending'
+		  AND (b.write_started_at IS NULL OR b.write_started_at < ?)
+		  AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id)
+	`)
+	if err = tx.QueryRow(countQuery, staleBefore).Scan(&totalStale); err != nil {
+		return 0, 0, err
+	}
+	if totalStale == 0 {
+		if err = tx.Commit(); err != nil {
+			return 0, 0, err
+		}
+		return 0, 0, nil
+	}
+
+	type staleBlob struct {
+		id             int64
+		volumeID       int64
+		sizeCompressed int64
+	}
+
+	selectQuery := m.buildQuery(`
+		SELECT b.id, COALESCE(b.volume_id, 0), COALESCE(b.size_compressed, 0)
+		FROM blobs b
+		WHERE b.state = 'pending'
+		  AND (b.write_started_at IS NULL OR b.write_started_at < ?)
+		  AND NOT EXISTS (SELECT 1 FROM files f WHERE f.blob_id = b.id)
+	`)
+	rows, qErr := tx.Query(selectQuery, staleBefore)
+	if qErr != nil {
+		err = qErr
+		return 0, 0, err
+	}
+	defer rows.Close()
+
+	var stale []staleBlob
+	for rows.Next() {
+		var b staleBlob
+		if scanErr := rows.Scan(&b.id, &b.volumeID, &b.sizeCompressed); scanErr != nil {
+			err = scanErr
+			return 0, 0, err
+		}
+		stale = append(stale, b)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		err = rowsErr
+		return 0, 0, err
+	}
+
+	deleteQuery := m.buildQuery(`DELETE FROM blobs WHERE id = ?`)
+	incDeletedQuery := m.buildQuery(`
+		INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, 0, ?)
+		ON CONFLICT(id) DO UPDATE SET size_deleted = size_deleted + ?
+	`)
+
+	for _, b := range stale {
+		if b.volumeID > 0 && b.sizeCompressed > 0 {
+			totalSize := int64(HeaderSize) + b.sizeCompressed + int64(FooterSize)
+			if _, execErr := tx.Exec(incDeletedQuery, b.volumeID, totalSize, totalSize); execErr != nil {
+				err = execErr
+				return deletedCount, totalStale, err
+			}
+		}
+		if _, execErr := tx.Exec(deleteQuery, b.id); execErr != nil {
+			err = execErr
+			return deletedCount, totalStale, err
+		}
+		deletedCount++
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return 0, totalStale, err
+	}
+
+	return deletedCount, totalStale, nil
 }

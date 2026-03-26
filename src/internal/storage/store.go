@@ -313,6 +313,11 @@ func (s *Store) WriteBlobWithMetadata(blobID int64, r io.Reader, size int64, com
 			return 0, 0, 0, err
 		}
 
+		// Durability: ensure volume payload and metadata index hit disk before success.
+		if err := f.Sync(); err != nil {
+			return 0, 0, 0, fmt.Errorf("failed to sync volume file: %w", err)
+		}
+
 		// Update volumes table BEFORE releasing lock to ensure atomic check + update
 		// This prevents race condition where multiple goroutines read old size_total
 		totalBytesWritten := int64(HeaderSize) + size + int64(FooterSize)
@@ -481,7 +486,13 @@ func (s *Store) writeMetaRecord(metaPath string, blobID int64, offset int64, siz
 	binary.BigEndian.PutUint32(metaRecord[25:29], crc)
 
 	_, err = mf.Write(metaRecord)
-	return err
+	if err != nil {
+		return err
+	}
+	if err := mf.Sync(); err != nil {
+		return fmt.Errorf("failed to sync meta file: %w", err)
+	}
+	return nil
 }
 
 // regenerateMetaFile regenerates the .meta file after compaction with updated offsets.
@@ -563,6 +574,10 @@ func (s *Store) regenerateMetaFile(volumeID int64, meta *MetadataSQL) error {
 		if _, err := mf.Write(metaRecord); err != nil {
 			return err
 		}
+	}
+
+	if err := mf.Sync(); err != nil {
+		return fmt.Errorf("failed to sync regenerated meta file: %w", err)
 	}
 
 	return nil

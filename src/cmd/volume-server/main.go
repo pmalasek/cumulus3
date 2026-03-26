@@ -74,6 +74,8 @@ func printStartupConfiguration() {
 		"SWAGGER_HOST",
 		"LOG_LEVEL",
 		"CLEANUP_INTERVAL",
+		"PENDING_BLOB_CLEANUP_INTERVAL",
+		"PENDING_BLOB_MAX_AGE",
 	}
 
 	for _, param := range configParams {
@@ -198,6 +200,55 @@ func main() {
 		utils.Warn("CONFIG", "Invalid CLEANUP_INTERVAL format '%s': %v, using default 1h", cleanupIntervalStr, err)
 		cleanupInterval = 1 * time.Hour
 	}
+
+	// Start stale pending blob cleanup
+	pendingCleanupIntervalStr := os.Getenv("PENDING_BLOB_CLEANUP_INTERVAL")
+	if pendingCleanupIntervalStr == "" {
+		pendingCleanupIntervalStr = cleanupIntervalStr // default: same cadence as temp-file cleanup
+	}
+	pendingCleanupInterval, err := time.ParseDuration(pendingCleanupIntervalStr)
+	if err != nil {
+		utils.Warn("CONFIG", "Invalid PENDING_BLOB_CLEANUP_INTERVAL format '%s': %v, using cleanup interval %v", pendingCleanupIntervalStr, err, cleanupInterval)
+		pendingCleanupInterval = cleanupInterval
+	}
+
+	pendingBlobMaxAgeStr := os.Getenv("PENDING_BLOB_MAX_AGE")
+	if pendingBlobMaxAgeStr == "" {
+		pendingBlobMaxAgeStr = "30m"
+	}
+	pendingBlobMaxAge, err := time.ParseDuration(pendingBlobMaxAgeStr)
+	if err != nil {
+		utils.Warn("CONFIG", "Invalid PENDING_BLOB_MAX_AGE format '%s': %v, using default 30m", pendingBlobMaxAgeStr, err)
+		pendingBlobMaxAge = 30 * time.Minute
+	}
+
+	go func() {
+		// Delay first run to avoid startup overhead
+		time.Sleep(2 * time.Minute)
+
+		ticker := time.NewTicker(pendingCleanupInterval)
+		defer ticker.Stop()
+
+		utils.Info("CLEANUP", "Stale pending blob cleanup scheduled every %v (max age: %v)", pendingCleanupInterval, pendingBlobMaxAge)
+
+		for {
+			utils.Info("CLEANUP", "Starting cleanup of stale pending blobs")
+			deletedCount, totalStale, err := metaStore.CleanupStalePendingBlobs(pendingBlobMaxAge)
+			if err != nil {
+				utils.Error("CLEANUP", "Error cleaning up stale pending blobs: %v", err)
+			} else if totalStale == 0 {
+				utils.Info("CLEANUP", "No stale pending blobs found")
+			} else if deletedCount == totalStale {
+				utils.Info("CLEANUP", "Successfully cleaned up %d stale pending blob(s)", deletedCount)
+			} else if deletedCount > 0 {
+				utils.Warn("CLEANUP", "Cleaned up %d of %d stale pending blobs (%d failed)", deletedCount, totalStale, totalStale-deletedCount)
+			} else {
+				utils.Error("CLEANUP", "Found %d stale pending blobs but all deletions failed", totalStale)
+			}
+
+			<-ticker.C
+		}
+	}()
 
 	go func() {
 		// Run first cleanup after 1 minute to avoid startup overhead
