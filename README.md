@@ -202,7 +202,7 @@ Cumulus3 separates **Logical Files** (user perspective) from **Physical Blobs** 
 ## Technology Stack
 
 | Component | Technology | Purpose |
-|-----------|-----------|---------|
+ | ----------- | ----------- | --------- |
 | **Language** | Go 1.25+ | High-performance, concurrent backend |
 | **Database** | SQLite 3 / PostgreSQL | Metadata storage (embedded or external) |
 | **Hashing** | BLAKE2b-256 | Fast, secure content hashing |
