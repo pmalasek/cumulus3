@@ -25,7 +25,7 @@ RUN go install github.com/swaggo/swag/cmd/swag@latest && \
 
 # Build všech binárních souborů
 RUN mkdir -p build
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/migrate_cumulus ./src/cmd/migrate_cumulus
+# RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/migrate_cumulus ./src/cmd/migrate_cumulus
 RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/recovery-tool ./src/cmd/recovery-tool
 RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/rebuild-db ./src/cmd/rebuild-db
 RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o build/compact-tool ./src/cmd/compact-tool
