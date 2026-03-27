@@ -826,6 +826,12 @@ func (m *MetadataSQL) FindFileByBlobNameAndExpiry(blobID int64, filename string,
 					FROM files
 					WHERE blob_id = ? AND name = ? AND expires_at IS ?
 					LIMIT 1`)
+	if m.dbType == "postgresql" {
+		query = m.buildQuery(`SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags
+					FROM files
+					WHERE blob_id = ? AND name = ? AND expires_at IS NOT DISTINCT FROM ?
+					LIMIT 1`)
+	}
 
 	var f File
 	err := m.db.QueryRow(query, blobID, filename, expAt).Scan(
@@ -855,6 +861,14 @@ func (m *MetadataSQL) FindFileByBlobAndName(blobID int64, filename string, oldCu
 					FROM files
 					WHERE blob_id = ? AND name = ? AND old_cumulus_id IS ? AND expires_at IS ?
 					LIMIT 1`)
+	if m.dbType == "postgresql" {
+		query = m.buildQuery(`SELECT id, name, blob_id, old_cumulus_id, expires_at, created_at, tags
+					FROM files
+					WHERE blob_id = ? AND name = ?
+					  AND old_cumulus_id IS NOT DISTINCT FROM ?
+					  AND expires_at IS NOT DISTINCT FROM ?
+					LIMIT 1`)
+	}
 
 	var f File
 	err := m.db.QueryRow(query, blobID, filename, oldID, expAt).Scan(
