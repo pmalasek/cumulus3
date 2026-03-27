@@ -1027,6 +1027,14 @@ func (m *MetadataSQL) GetVolumeSize(volumeID int64) (int64, error) {
 }
 
 func (m *MetadataSQL) AddWrittenBytesToVolume(volumeID int64, bytes int64) error {
+	if m.dbType == "postgresql" {
+		_, err := m.db.Exec(`
+			INSERT INTO volumes (id, size_total, size_deleted) VALUES ($1, $2, 0)
+			ON CONFLICT(id) DO UPDATE SET size_total = volumes.size_total + EXCLUDED.size_total
+		`, volumeID, bytes)
+		return err
+	}
+
 	volQuery := m.buildQuery(`
 		INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, ?, 0)
 		ON CONFLICT(id) DO UPDATE SET size_total = size_total + ?
@@ -1135,6 +1143,14 @@ func (c *VolumeCompactionTx) Rollback() error {
 }
 
 func (m *MetadataSQL) IncrementDeletedSize(volumeID int64, bytes int64) error {
+	if m.dbType == "postgresql" {
+		_, err := m.db.Exec(`
+			INSERT INTO volumes (id, size_total, size_deleted) VALUES ($1, 0, $2)
+			ON CONFLICT(id) DO UPDATE SET size_deleted = volumes.size_deleted + EXCLUDED.size_deleted
+		`, volumeID, bytes)
+		return err
+	}
+
 	query := m.buildQuery(`
 INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, 0, ?)
 ON CONFLICT(id) DO UPDATE SET size_deleted = size_deleted + ?
@@ -1234,11 +1250,22 @@ func (m *MetadataSQL) DeleteFile(fileID string) error {
 		totalSize := int64(HeaderSize) + sizeCompressed + int64(FooterSize)
 
 		// Update volumes table
-		volQuery := m.buildQuery(`
+		var volQuery string
+		var volArgs []any
+		if m.dbType == "postgresql" {
+			volQuery = `
+INSERT INTO volumes (id, size_total, size_deleted) VALUES ($1, 0, $2)
+ON CONFLICT(id) DO UPDATE SET size_deleted = volumes.size_deleted + EXCLUDED.size_deleted
+`
+			volArgs = []any{volumeID, totalSize}
+		} else {
+			volQuery = m.buildQuery(`
 INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, 0, ?)
 ON CONFLICT(id) DO UPDATE SET size_deleted = size_deleted + ?
 `)
-		if _, err = tx.Exec(volQuery, volumeID, totalSize, totalSize); err != nil {
+			volArgs = []any{volumeID, totalSize, totalSize}
+		}
+		if _, err = tx.Exec(volQuery, volArgs...); err != nil {
 			return err
 		}
 
@@ -1367,15 +1394,29 @@ func (m *MetadataSQL) CleanupStalePendingBlobs(maxAge time.Duration) (deletedCou
 	}
 
 	deleteQuery := m.buildQuery(`DELETE FROM blobs WHERE id = ?`)
-	incDeletedQuery := m.buildQuery(`
-		INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, 0, ?)
-		ON CONFLICT(id) DO UPDATE SET size_deleted = size_deleted + ?
-	`)
+	var incDeletedQuery string
+	if m.dbType == "postgresql" {
+		incDeletedQuery = `
+			INSERT INTO volumes (id, size_total, size_deleted) VALUES ($1, 0, $2)
+			ON CONFLICT(id) DO UPDATE SET size_deleted = volumes.size_deleted + EXCLUDED.size_deleted
+		`
+	} else {
+		incDeletedQuery = m.buildQuery(`
+			INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, 0, ?)
+			ON CONFLICT(id) DO UPDATE SET size_deleted = size_deleted + ?
+		`)
+	}
 
 	for _, b := range stale {
 		if b.volumeID > 0 && b.sizeCompressed > 0 {
 			totalSize := int64(HeaderSize) + b.sizeCompressed + int64(FooterSize)
-			if _, execErr := tx.Exec(incDeletedQuery, b.volumeID, totalSize, totalSize); execErr != nil {
+			var execErr error
+			if m.dbType == "postgresql" {
+				_, execErr = tx.Exec(incDeletedQuery, b.volumeID, totalSize)
+			} else {
+				_, execErr = tx.Exec(incDeletedQuery, b.volumeID, totalSize, totalSize)
+			}
+			if execErr != nil {
 				err = execErr
 				return deletedCount, totalStale, err
 			}

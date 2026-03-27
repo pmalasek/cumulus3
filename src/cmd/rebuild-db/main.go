@@ -253,10 +253,18 @@ func main() {
 	// Update volumes table
 	fmt.Println("  → Updating volume sizes...")
 	for volumeID, size := range volumeSizes {
-		_, err := meta.GetDB().Exec(`
-			INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, ?, 0)
-			ON CONFLICT(id) DO UPDATE SET size_total = ?
-		`, volumeID, size, size)
+		var err error
+		if dbType == "postgresql" {
+			_, err = meta.GetDB().Exec(`
+				INSERT INTO volumes (id, size_total, size_deleted) VALUES ($1, $2, 0)
+				ON CONFLICT(id) DO UPDATE SET size_total = EXCLUDED.size_total
+			`, volumeID, size)
+		} else {
+			_, err = meta.GetDB().Exec(`
+				INSERT INTO volumes (id, size_total, size_deleted) VALUES (?, ?, 0)
+				ON CONFLICT(id) DO UPDATE SET size_total = ?
+			`, volumeID, size, size)
+		}
 		if err != nil {
 			log.Printf("Warning: Failed to update volume %d: %v", volumeID, err)
 		}
