@@ -29,9 +29,8 @@ type Server struct {
 
 // UploadResponse represents the response from file upload
 type UploadResponse struct {
-	FileID       string `json:"fileID" example:"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"`
-	CumulusID    string `json:"cumulusID" example:"123456"`
-	OldCumulusID int64  `json:"old_cumulus_id" example:"123456"`
+	FileID    string `json:"fileID" example:"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"`
+	CumulusID string `json:"cumulusID" example:"123456"`
 }
 
 // Routes vytvoří router a zaregistruje cesty
@@ -174,9 +173,8 @@ func (s *Server) HandleUploadFunc(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(UploadResponse{
-		FileID:       fileID,
-		CumulusID:    fmt.Sprintf("%d", assignedOldID),
-		OldCumulusID: assignedOldID,
+		FileID:    fileID,
+		CumulusID: fmt.Sprintf("%d", assignedOldID),
 	})
 }
 
